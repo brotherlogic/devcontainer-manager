@@ -26,6 +26,10 @@ func main() {
 	flag.Parse()
 	log.Println("Starting devcontainer manager...")
 
+	if err := checkGHAuth(); err != nil {
+		log.Fatalf("GitHub CLI authentication failed: %v", err)
+	}
+
 	// Track the last seen commit for each repo
 	trackedSHAs := make(map[string]string)
 
@@ -39,6 +43,15 @@ func main() {
 	for range ticker.C {
 		checkRepos(trackedSHAs)
 	}
+}
+
+func checkGHAuth() error {
+	cmd := exec.Command("gh", "auth", "status")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("GitHub CLI is not authenticated. Please run 'gh auth login' to authenticate.\nDetails: %s", strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 func checkRepos(trackedSHAs map[string]string) {
