@@ -30,6 +30,10 @@ func main() {
 		log.Fatalf("GitHub CLI authentication failed: %v", err)
 	}
 
+	if err := checkDevPodProvider(); err != nil {
+		log.Fatalf("DevPod provider configuration failed: %v", err)
+	}
+
 	// Track the last seen commit for each repo
 	trackedSHAs := make(map[string]string)
 
@@ -51,6 +55,25 @@ func checkGHAuth() error {
 	if err != nil {
 		return fmt.Errorf("GitHub CLI is not authenticated. Please run 'gh auth login' to authenticate.\nDetails: %s", strings.TrimSpace(string(output)))
 	}
+	return nil
+}
+
+func checkDevPodProvider() error {
+	cmd := exec.Command(devpodExe, "provider", "list", "--output", "json")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to list devpod providers: %w (output: %s)", err, strings.TrimSpace(string(output)))
+	}
+
+	var providers map[string]interface{}
+	if err := json.Unmarshal(output, &providers); err != nil {
+		return fmt.Errorf("failed to parse devpod providers: %w", err)
+	}
+
+	if len(providers) == 0 {
+		return fmt.Errorf("no DevPod provider found. Please add a provider (e.g., '%s provider add docker')", devpodExe)
+	}
+
 	return nil
 }
 
