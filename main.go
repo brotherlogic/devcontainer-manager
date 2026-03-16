@@ -70,9 +70,17 @@ func readContainerList() ([]string, error) {
 	file, err := os.Open("container.list")
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil // If file doesn't exist, just return empty
+			log.Println("container.list not found, pulling template from GitHub...")
+			if pullErr := pullTemplateFromGitHub(); pullErr != nil {
+				return nil, fmt.Errorf("failed to pull template: %w", pullErr)
+			}
+			file, err = os.Open("container.list")
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, err
 		}
-		return nil, err
 	}
 	defer file.Close()
 
@@ -87,6 +95,15 @@ func readContainerList() ([]string, error) {
 	}
 
 	return repos, scanner.Err()
+}
+
+func pullTemplateFromGitHub() error {
+	cmd := exec.Command("gh", "api", "repos/brotherlogic/devcontainer-manager/contents/container.list.template", "-H", "Accept: application/vnd.github.v3.raw")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("gh api error: %w (output: %s)", err, strings.TrimSpace(string(output)))
+	}
+	return os.WriteFile("container.list", output, 0644)
 }
 
 func checkRepo(repo string, trackedSHAs map[string]string) {
