@@ -122,7 +122,11 @@ func checkRepo(repo string, trackedSHAs map[string]string) {
 
 	lastSeen, exists := trackedSHAs[repo]
 	if !exists {
-		log.Printf("Initial tracking for %s at commit state %s", repo, latestSHA)
+		log.Printf("Initial tracking for %s at commit state %s. Bringing up container...", repo, latestSHA)
+		if err := bringUpDevcontainer(repo); err != nil {
+			log.Printf("Failed to bring up devcontainer for %s: %v", repo, err)
+			return
+		}
 		trackedSHAs[repo] = latestSHA
 		return
 	}
@@ -185,6 +189,19 @@ func recreateDevcontainer(repo string) error {
 	log.Printf("%s delete output: %s", devpodExe, string(deleteOut))
 
 	log.Printf("Creating new devcontainer for %s...", repo)
+	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo))
+	upOut, err := upCmd.CombinedOutput()
+	log.Printf("%s up output: %s", devpodExe, string(upOut))
+
+	if err != nil {
+		return fmt.Errorf("%s up failed: %w", devpodExe, err)
+	}
+
+	return nil
+}
+
+func bringUpDevcontainer(repo string) error {
+	log.Printf("Bringing up devcontainer for %s...", repo)
 	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo))
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
