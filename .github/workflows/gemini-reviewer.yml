@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Gemini AI Code Review
-        uses: truongnh1992/gemini-ai-code-reviewer@v1.5
+        uses: truongnh1992/gemini-ai-code-reviewer@main
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
