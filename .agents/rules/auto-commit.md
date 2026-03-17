@@ -1,0 +1,6 @@
+---
+description: Always commit and push changes at the end of a task
+---
+When completing any task, ALWAYS commit and push your changes.
+If you are currently on the 'main' branch, create a new branch with an appropriate name first before committing and pushing.
+If you are on a different branch, commit and push directly to that branch.
