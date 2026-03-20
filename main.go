@@ -27,11 +27,11 @@ func main() {
 	log.Println("Starting devcontainer manager...")
 
 	if err := checkGHAuth(); err != nil {
-		log.Fatalf("GitHub CLI authentication failed: %v", err)
+		notifyFatal("GitHub CLI authentication failed: %v", err)
 	}
 
 	if err := checkDevPodProvider(); err != nil {
-		log.Fatalf("DevPod provider configuration failed: %v", err)
+		notifyFatal("DevPod provider configuration failed: %v", err)
 	}
 
 	// Track the last seen commit for each repo
@@ -80,7 +80,7 @@ func checkDevPodProvider() error {
 func checkRepos(trackedSHAs map[string]string) {
 	repos, err := readContainerList()
 	if err != nil {
-		log.Printf("Error reading container.list: %v", err)
+		notifyError("Error reading container.list: %v", err)
 		return
 	}
 
@@ -134,7 +134,7 @@ func checkRepo(repo string, trackedSHAs map[string]string) {
 
 	latestSHA, err := getLatestDevcontainerCommit(repo)
 	if err != nil {
-		log.Printf("Error checking commits for %s: %v", repo, err)
+		notifyError("Error checking commits for %s: %v", repo, err)
 		return
 	}
 
@@ -147,7 +147,7 @@ func checkRepo(repo string, trackedSHAs map[string]string) {
 	if !exists {
 		log.Printf("Initial tracking for %s at commit state %s. Bringing up container...", repo, latestSHA)
 		if err := bringUpDevcontainer(repo); err != nil {
-			log.Printf("Failed to bring up devcontainer for %s: %v", repo, err)
+			notifyError("Failed to bring up devcontainer for %s: %v", repo, err)
 			return
 		}
 		trackedSHAs[repo] = latestSHA
@@ -159,7 +159,7 @@ func checkRepo(repo string, trackedSHAs map[string]string) {
 
 		err := recreateDevcontainer(repo)
 		if err != nil {
-			log.Printf("Failed to recreate devcontainer for %s: %v", repo, err)
+			notifyError("Failed to recreate devcontainer for %s: %v", repo, err)
 			return // Don't update tracked SHA if recreation failed so it retries next time
 		}
 
@@ -234,4 +234,18 @@ func bringUpDevcontainer(repo string) error {
 	}
 
 	return nil
+}
+
+// notifyError uses the Linux notify-send command to show a critical desktop notification,
+// instead of just printing to the console, so the user doesn't miss errors from this background process.
+func notifyError(format string, v ...interface{}) {
+	msg := fmt.Sprintf(format, v...)
+	log.Print(msg)
+	exec.Command("notify-send", "-u", "critical", "Devcontainer Manager Error", msg).Run()
+}
+
+// notifyFatal shows a critical desktop notification and then exits the program.
+func notifyFatal(format string, v ...interface{}) {
+	notifyError(format, v...)
+	os.Exit(1)
 }
