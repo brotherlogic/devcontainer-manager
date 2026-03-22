@@ -224,6 +224,8 @@ func recreateDevcontainer(repo string) error {
 		return fmt.Errorf("%s up failed: %w", devpodExe, err)
 	}
 
+	renameDockerContainer(projectName)
+
 	return nil
 }
 
@@ -240,6 +242,8 @@ func bringUpDevcontainer(repo string) error {
 		return fmt.Errorf("%s up failed: %w", devpodExe, err)
 	}
 
+	renameDockerContainer(projectName)
+
 	return nil
 }
 
@@ -255,4 +259,74 @@ func notifyError(format string, v ...interface{}) {
 func notifyFatal(format string, v ...interface{}) {
 	notifyError(format, v...)
 	os.Exit(1)
+}
+
+func renameDockerContainer(projectName string) {
+	log.Printf("Attempting to rename docker container to %s...", projectName)
+
+	out, err := exec.Command("docker", "ps", "--format", "{{.ID}}|{{.Names}}|{{.Image}}|{{.Labels}}").Output()
+	if err != nil {
+		log.Printf("Error running docker ps: %v", err)
+		return
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	var targetID, currentName string
+
+	for _, line := range lines {
+		if line == "" { continue }
+		parts := strings.Split(line, "|")
+		if len(parts) >= 4 {
+			id, name, labels := parts[0], parts[1], parts[3]
+			if strings.Contains(labels, fmt.Sprintf("sh.loft.devpod.workspace.id=%s", projectName)) ||
+				strings.Contains(labels, fmt.Sprintf("dev.containers.id=%s", projectName)) {
+				targetID, currentName = id, name
+				break
+			}
+		}
+	}
+
+	if targetID == "" {
+		for _, line := range lines {
+			if line == "" { continue }
+			parts := strings.Split(line, "|")
+			if len(parts) >= 3 {
+				id, name, image := parts[0], parts[1], parts[2]
+				if strings.Contains(image, "devpod-") && name != projectName {
+					targetID, currentName = id, name
+					break
+				}
+			}
+		}
+	}
+
+	if targetID == "" {
+		for _, line := range lines {
+			if line == "" { continue }
+			parts := strings.Split(line, "|")
+			if len(parts) >= 3 {
+				id, name, image := parts[0], parts[1], parts[2]
+				if strings.Contains(image, "vsc-content") && name != projectName {
+					targetID, currentName = id, name
+					break
+				}
+			}
+		}
+	}
+
+	if targetID != "" {
+		if currentName == projectName {
+			log.Printf("Container %s is already named %s", targetID, projectName)
+			return
+		}
+
+		log.Printf("Renaming container %s (currently %s) to %s", targetID, currentName, projectName)
+		if err := exec.Command("docker", "rename", targetID, projectName).Run(); err != nil {
+			log.Printf("Failed to rename container: %v", err)
+		} else {
+			log.Printf("Successfully renamed container to %s", projectName)
+		}
+	} else {
+		log.Printf("Could not identify which container to rename for %s", projectName)
+	}
 }
