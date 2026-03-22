@@ -5,3 +5,18 @@ and if it detects that the devcontainer configuration has changed, it will delet
 
 It assumes the existance of the gh cli for detecting changes to the devcontainer configuration. And additionally assumes that the user has devpod
 cli installed for managing devcontainers and running them. Project is written in golang, using the latest standards. 
+
+## Installation
+
+You can install the project and set it up as a systemd user service by running the provided `install.sh` script.
+
+```bash
+sudo ./install.sh
+```
+
+This script will:
+1. Build the binary using your regular user's `go` environment
+2. Move the built binary to `/usr/local/bin`
+3. Configure a systemd user service based on `service-file`
+4. Enable lingering for your user so that the service runs in the background even when you are not logged in
+5. Enable and start the systemd service
