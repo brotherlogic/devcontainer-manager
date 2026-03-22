@@ -1,0 +1,14 @@
+[Unit]
+Description=Devcontainer Manager Daemon
+After=network-online.target
+[Service]
+Type=simple
+# Assumes the binary is installed here
+ExecStart=%h/.local/bin/devcontainer-manager
+Restart=always
+RestartSec=10
+# Passes DBUS info so notify-send desktop notifications work from the background
+Environment="DISPLAY=:0"
+Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus"
+[Install]
+WantedBy=default.target
