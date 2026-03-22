@@ -1,7 +1,7 @@
 name: Gemini AI PR Reviewer
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
 
 jobs:
   review:

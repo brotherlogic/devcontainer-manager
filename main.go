@@ -42,7 +42,7 @@ func main() {
 
 	// Run initial check immediately
 	checkRepos(trackedSHAs)
-	
+
 	// Loop to check periodically
 	for range ticker.C {
 		checkRepos(trackedSHAs)
@@ -206,13 +206,17 @@ func getLatestCommitForPath(repo, path string) (string, error) {
 }
 
 func recreateDevcontainer(repo string) error {
-	log.Printf("Deleting previous devcontainer for %s...", repo)
-	deleteCmd := exec.Command(devpodExe, "delete", fmt.Sprintf("github.com/%s", repo))
+	parts := strings.Split(repo, "/")
+	projectName := parts[len(parts)-1]
+
+	log.Printf("Deleting previous devcontainer for %s (id: %s)...", repo, projectName)
+	// Try deleting by project name first, fallback to repo if needed by user manually
+	deleteCmd := exec.Command(devpodExe, "delete", projectName)
 	deleteOut, _ := deleteCmd.CombinedOutput()
 	log.Printf("%s delete output: %s", devpodExe, string(deleteOut))
 
-	log.Printf("Creating new devcontainer for %s...", repo)
-	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo))
+	log.Printf("Creating new devcontainer for %s with id %s...", repo, projectName)
+	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName)
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
 
@@ -224,8 +228,11 @@ func recreateDevcontainer(repo string) error {
 }
 
 func bringUpDevcontainer(repo string) error {
-	log.Printf("Bringing up devcontainer for %s...", repo)
-	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo))
+	parts := strings.Split(repo, "/")
+	projectName := parts[len(parts)-1]
+
+	log.Printf("Bringing up devcontainer for %s with id %s...", repo, projectName)
+	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName)
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
 

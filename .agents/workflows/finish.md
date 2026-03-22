@@ -1,5 +1,5 @@
 ---
-description: Commit and push changes to main
+description: Commit and push changes to a new branch
 ---
 When finishing a task, run the following steps:
 
@@ -7,9 +7,13 @@ When finishing a task, run the following steps:
    `go build`
 
 // turbo
-2. Commit the changes:
+2. Create and checkout a new branch with a descriptive name:
+   `git checkout -b <descriptive-branch-name>`
+
+// turbo
+3. Commit the changes:
    `git commit -am "<descriptive commit message>"`
 
 // turbo
-3. Push the changes to the main branch:
-   `git push origin main`
+4. Push the changes to the newly created branch:
+   `git push -u origin HEAD`
