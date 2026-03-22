@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -90,14 +91,15 @@ func checkRepos(trackedSHAs map[string]string) {
 }
 
 func readContainerList() ([]string, error) {
-	file, err := os.Open("container.list")
+	configPath := filepath.Join(getConfigDir(), "container.list")
+	file, err := os.Open(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			log.Println("container.list not found, pulling template from GitHub...")
-			if pullErr := pullTemplateFromGitHub(); pullErr != nil {
+			log.Printf("%s not found, pulling template from GitHub...", configPath)
+			if pullErr := pullTemplateFromGitHub(configPath); pullErr != nil {
 				return nil, fmt.Errorf("failed to pull template: %w", pullErr)
 			}
-			file, err = os.Open("container.list")
+			file, err = os.Open(configPath)
 			if err != nil {
 				return nil, err
 			}
@@ -120,13 +122,23 @@ func readContainerList() ([]string, error) {
 	return repos, scanner.Err()
 }
 
-func pullTemplateFromGitHub() error {
+func pullTemplateFromGitHub(configPath string) error {
 	cmd := exec.Command("gh", "api", "repos/brotherlogic/devcontainer-manager/contents/container.list.template", "-H", "Accept: application/vnd.github.v3.raw")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("gh api error: %w (output: %s)", err, strings.TrimSpace(string(output)))
 	}
-	return os.WriteFile("container.list", output, 0644)
+	return os.WriteFile(configPath, output, 0644)
+}
+
+func getConfigDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "."
+	}
+	configDir := filepath.Join(home, ".config", "devcontainer-manager")
+	os.MkdirAll(configDir, 0755)
+	return configDir
 }
 
 func checkRepo(repo string, trackedSHAs map[string]string) {
