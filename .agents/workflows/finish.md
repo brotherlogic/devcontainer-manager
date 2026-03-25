@@ -24,3 +24,7 @@ When finishing a task, run the following steps:
 6. Find the newly pushed branch in a Pull Request using the gh tool - this may require some retries
 
 7. Trigger a review by posting a comment to the Pull Request '/gemini-review' 
+
+8. Wait for the review to appear and make an adjustment to the existing code to address the review
+
+9. Push this change.

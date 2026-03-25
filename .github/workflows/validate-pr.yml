@@ -40,8 +40,8 @@ jobs:
           LATEST_REVIEW_DATE=$(gh api repos/$REPO/pulls/$PR_NUMBER/reviews --jq '[.[] | select(.user?.login == "github-actions" and (.body != null) and (.body | contains("Gemini AI Code Review")))] | last | .submitted_at')
           
           if [ -z "$LATEST_REVIEW_DATE" ] || [ "$LATEST_REVIEW_DATE" = "null" ]; then
-            echo "No Gemini AI Code Review found. Passing validation."
-            exit 0
+            echo "No Gemini AI Code Review found. Failing validation."
+            exit 1
           fi
 
           echo "Latest AI review date: $LATEST_REVIEW_DATE"
