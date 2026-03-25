@@ -79,10 +79,30 @@ func checkDevPodProvider() error {
 }
 
 func checkRepos(trackedSHAs map[string]string) {
+	configPath := filepath.Join(getConfigDir(), "container.list")
+	
+	log.Printf("Syncing container list from remote template...")
+	if err := pullTemplateFromGitHub(configPath); err != nil {
+		log.Printf("Warning: failed to sync container.list from template: %v", err)
+	}
+
 	repos, err := readContainerList()
 	if err != nil {
 		notifyError("Error reading container.list: %v", err)
 		return
+	}
+
+	currentRepos := make(map[string]bool)
+	for _, repo := range repos {
+		currentRepos[repo] = true
+	}
+
+	for trackedRepo := range trackedSHAs {
+		if !currentRepos[trackedRepo] {
+			log.Printf("Repo %s was removed from template. Deleting devcontainer...", trackedRepo)
+			deleteDevcontainer(trackedRepo)
+			delete(trackedSHAs, trackedRepo)
+		}
 	}
 
 	for _, repo := range repos {
@@ -231,11 +251,7 @@ func recreateDevcontainer(repo string) error {
 	parts := strings.Split(repo, "/")
 	projectName := parts[len(parts)-1]
 
-	log.Printf("Deleting previous devcontainer for %s (id: %s)...", repo, projectName)
-	// Try deleting by project name first, fallback to repo if needed by user manually
-	deleteCmd := exec.Command(devpodExe, "delete", projectName)
-	deleteOut, _ := deleteCmd.CombinedOutput()
-	log.Printf("%s delete output: %s", devpodExe, string(deleteOut))
+	deleteDevcontainer(repo)
 
 	log.Printf("Creating new devcontainer for %s with id %s...", repo, projectName)
 	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName)
@@ -375,4 +391,18 @@ func isContainerRunning(projectName string) bool {
 	}
 
 	return false
+}
+
+func deleteDevcontainer(repo string) {
+	parts := strings.Split(repo, "/")
+	projectName := parts[len(parts)-1]
+
+	log.Printf("Deleting devcontainer for %s (id: %s)...", repo, projectName)
+	deleteCmd := exec.Command(devpodExe, "delete", projectName)
+	deleteOut, err := deleteCmd.CombinedOutput()
+	if err != nil {
+		log.Printf("Warning: failed to delete devcontainer for %s: %v (output: %s)", repo, err, string(deleteOut))
+	} else {
+		log.Printf("Successfully deleted devcontainer for %s", repo)
+	}
 }
