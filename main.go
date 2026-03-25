@@ -84,6 +84,7 @@ func checkRepos(trackedSHAs map[string]string) {
 	log.Printf("Syncing container list from remote template...")
 	if err := pullTemplateFromGitHub(configPath); err != nil {
 		log.Printf("Warning: failed to sync container.list from template: %v", err)
+		return
 	}
 
 	repos, err := readContainerList()
@@ -97,11 +98,19 @@ func checkRepos(trackedSHAs map[string]string) {
 		currentRepos[repo] = true
 	}
 
+	var reposToDelete []string
 	for trackedRepo := range trackedSHAs {
 		if !currentRepos[trackedRepo] {
-			log.Printf("Repo %s was removed from template. Deleting devcontainer...", trackedRepo)
-			deleteDevcontainer(trackedRepo)
-			delete(trackedSHAs, trackedRepo)
+			reposToDelete = append(reposToDelete, trackedRepo)
+		}
+	}
+
+	for _, repo := range reposToDelete {
+		log.Printf("Repo %s was removed from template. Deleting devcontainer...", repo)
+		if err := deleteDevcontainer(repo); err != nil {
+			log.Printf("Failed to delete devcontainer for %s: %v", repo, err)
+		} else {
+			delete(trackedSHAs, repo)
 		}
 	}
 
@@ -198,8 +207,7 @@ func checkRepo(repo string, trackedSHAs map[string]string) {
 		trackedSHAs[repo] = latestSHA
 		log.Printf("Successfully updated devcontainer for %s", repo)
 	} else {
-		parts := strings.Split(repo, "/")
-		projectName := parts[len(parts)-1]
+		projectName := filepath.Base(repo)
 		if !isContainerRunning(projectName) {
 			log.Printf("No new updates for %s, but container is not running. Bringing it up...", repo)
 			if err := bringUpDevcontainer(repo); err != nil {
@@ -248,10 +256,11 @@ func getLatestCommitForPath(repo, path string) (string, error) {
 }
 
 func recreateDevcontainer(repo string) error {
-	parts := strings.Split(repo, "/")
-	projectName := parts[len(parts)-1]
+	projectName := filepath.Base(repo)
 
-	deleteDevcontainer(repo)
+	if err := deleteDevcontainer(repo); err != nil {
+		log.Printf("Warning: delete error ignored during recreation for %s: %v", repo, err)
+	}
 
 	log.Printf("Creating new devcontainer for %s with id %s...", repo, projectName)
 	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName)
@@ -268,8 +277,7 @@ func recreateDevcontainer(repo string) error {
 }
 
 func bringUpDevcontainer(repo string) error {
-	parts := strings.Split(repo, "/")
-	projectName := parts[len(parts)-1]
+	projectName := filepath.Base(repo)
 
 	log.Printf("Bringing up devcontainer for %s with id %s...", repo, projectName)
 	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName)
@@ -393,16 +401,16 @@ func isContainerRunning(projectName string) bool {
 	return false
 }
 
-func deleteDevcontainer(repo string) {
-	parts := strings.Split(repo, "/")
-	projectName := parts[len(parts)-1]
+func deleteDevcontainer(repo string) error {
+	projectName := filepath.Base(repo)
 
 	log.Printf("Deleting devcontainer for %s (id: %s)...", repo, projectName)
 	deleteCmd := exec.Command(devpodExe, "delete", projectName)
 	deleteOut, err := deleteCmd.CombinedOutput()
 	if err != nil {
-		log.Printf("Warning: failed to delete devcontainer for %s: %v (output: %s)", repo, err, string(deleteOut))
-	} else {
-		log.Printf("Successfully deleted devcontainer for %s", repo)
+		return fmt.Errorf("%s delete failed: %w (output: %s)", devpodExe, err, string(deleteOut))
 	}
+	
+	log.Printf("Successfully deleted devcontainer for %s", repo)
+	return nil
 }
