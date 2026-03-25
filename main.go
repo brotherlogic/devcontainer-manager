@@ -178,7 +178,17 @@ func checkRepo(repo string, trackedSHAs map[string]string) {
 		trackedSHAs[repo] = latestSHA
 		log.Printf("Successfully updated devcontainer for %s", repo)
 	} else {
-		log.Printf("No new updates for %s", repo)
+		parts := strings.Split(repo, "/")
+		projectName := parts[len(parts)-1]
+		if !isContainerRunning(projectName) {
+			log.Printf("No new updates for %s, but container is not running. Bringing it up...", repo)
+			if err := bringUpDevcontainer(repo); err != nil {
+				notifyError("Failed to bring up devcontainer for %s: %v", repo, err)
+				return
+			}
+		} else {
+			log.Printf("No new updates for %s, and container is running", repo)
+		}
 	}
 }
 
@@ -341,4 +351,28 @@ func renameDockerContainer(projectName string) {
 	} else {
 		log.Printf("Could not identify which container to rename for %s", projectName)
 	}
+}
+
+func isContainerRunning(projectName string) bool {
+	out, err := exec.Command("docker", "ps", "--format", "{{.Names}}|{{.Labels}}").Output()
+	if err != nil {
+		return false
+	}
+
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" { continue }
+		parts := strings.Split(line, "|")
+		if len(parts) >= 2 {
+			name, labels := parts[0], parts[1]
+			if name == projectName {
+				return true
+			}
+			if strings.Contains(labels, fmt.Sprintf("sh.loft.devpod.workspace.id=%s", projectName)) ||
+				strings.Contains(labels, fmt.Sprintf("dev.containers.id=%s", projectName)) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
