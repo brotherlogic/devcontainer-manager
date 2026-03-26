@@ -4,7 +4,7 @@ After=network-online.target
 [Service]
 Type=simple
 # Pull and rebuild on startup
-ExecStartPre=/bin/bash -c "cd %PROJECT_DIR% && (git pull \|\| true) && %GO_CMD% build -o %h/.local/bin/devcontainer-manager main.go"
+ExecStartPre=/bin/bash -c "cd %PROJECT_DIR% && (git pull || true) && %GO_CMD% build -o %h/.local/bin/devcontainer-manager main.go"
 # Assumes the binary is installed here
 ExecStart=%h/.local/bin/devcontainer-manager
 Restart=always
