@@ -23,6 +23,15 @@ type Commit struct {
 	Sha string `json:"sha"`
 }
 
+type Workspace struct {
+	ID     string `json:"id"`
+	Source Source `json:"source"`
+}
+
+type Source struct {
+	GitRepository string `json:"gitRepository"`
+}
+
 func main() {
 	flag.Parse()
 	log.Println("Starting devcontainer manager...")
@@ -54,7 +63,7 @@ func checkGHAuth() error {
 	cmd := exec.Command("gh", "auth", "status")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("GitHub CLI is not authenticated. Please run 'gh auth login' to authenticate.\nDetails: %s", strings.TrimSpace(string(output)))
+		return fmt.Errorf("GitHub CLI authentication failed: %w (details: %s)", err, strings.TrimSpace(string(output)))
 	}
 	return nil
 }
@@ -84,7 +93,7 @@ func checkRepos(trackedSHAs map[string]string) {
 	log.Printf("Syncing container list from remote template...")
 	if err := pullTemplateFromGitHub(configPath); err != nil {
 		log.Printf("Warning: failed to sync container.list from template: %v", err)
-		return
+		// We'll continue with the local container.list if it exists
 	}
 
 	repos, err := readContainerList()
@@ -93,24 +102,37 @@ func checkRepos(trackedSHAs map[string]string) {
 		return
 	}
 
+	currentWorkspaces, err := getExistingWorkspaces()
+	if err != nil {
+		log.Printf("Error: failed to get existing devpod workspaces: %v. Skipping sync interval for safety.", err)
+		return
+	}
+
 	currentRepos := make(map[string]bool)
 	for _, repo := range repos {
 		currentRepos[repo] = true
 	}
 
-	var reposToDelete []string
-	for trackedRepo := range trackedSHAs {
-		if !currentRepos[trackedRepo] {
-			reposToDelete = append(reposToDelete, trackedRepo)
-		}
+	// Deleting workspaces that are not in the template anymore
+	// Pre-calculate mapping of IDs to repos in template for faster lookup
+	templateRepoIDs := make(map[string]string)
+	for _, repo := range repos {
+		templateRepoIDs[filepath.Base(repo)] = repo
 	}
 
-	for _, repo := range reposToDelete {
-		log.Printf("Repo %s was removed from template. Deleting devcontainer...", repo)
-		if err := deleteDevcontainer(repo); err != nil {
-			log.Printf("Failed to delete devcontainer for %s: %v", repo, err)
-		} else {
-			delete(trackedSHAs, repo)
+	for id := range currentWorkspaces {
+		if _, exists := templateRepoIDs[id]; !exists {
+			log.Printf("Workspace %s is no longer in the template. Deleting...", id)
+			if err := deleteDevcontainerByID(id); err != nil {
+				log.Printf("Failed to delete workspace %s: %v", id, err)
+			} else {
+				// Efficiently remove from trackedSHAs
+				for repo := range trackedSHAs {
+					if filepath.Base(repo) == id {
+						delete(trackedSHAs, repo)
+					}
+				}
+			}
 		}
 	}
 
@@ -157,7 +179,32 @@ func pullTemplateFromGitHub(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("gh api error: %w (output: %s)", err, strings.TrimSpace(string(output)))
 	}
+	if len(output) == 0 {
+		return fmt.Errorf("empty response from GitHub template API")
+	}
 	return os.WriteFile(configPath, output, 0644)
+}
+
+func getExistingWorkspaces() (map[string]Workspace, error) {
+	cmd := exec.Command(devpodExe, "list", "--output", "json")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list devpod workspaces: %w (output: %s)", err, strings.TrimSpace(string(output)))
+	}
+
+	var workspaces []Workspace
+	if err := json.Unmarshal(output, &workspaces); err != nil {
+		return nil, fmt.Errorf("failed to parse devpod workspaces json: %w", err)
+	}
+
+	wsMap := make(map[string]Workspace)
+	for _, ws := range workspaces {
+		if _, exists := wsMap[ws.ID]; exists {
+			log.Printf("Warning: duplicate workspace ID '%s' found in devpod list. Overwriting for represented mapping.", ws.ID)
+		}
+		wsMap[ws.ID] = ws
+	}
+	return wsMap, nil
 }
 
 func getConfigDir() string {
@@ -403,14 +450,18 @@ func isContainerRunning(projectName string) bool {
 
 func deleteDevcontainer(repo string) error {
 	projectName := filepath.Base(repo)
+	log.Printf("Initiating devcontainer deletion for repository '%s' (project ID: '%s')...", repo, projectName)
+	return deleteDevcontainerByID(projectName)
+}
 
-	log.Printf("Deleting devcontainer for %s (id: %s)...", repo, projectName)
-	deleteCmd := exec.Command(devpodExe, "delete", projectName)
+func deleteDevcontainerByID(id string) error {
+	log.Printf("Deleting devcontainer with id: %s...", id)
+	deleteCmd := exec.Command(devpodExe, "delete", id)
 	deleteOut, err := deleteCmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s delete failed: %w (output: %s)", devpodExe, err, string(deleteOut))
 	}
 	
-	log.Printf("Successfully deleted devcontainer for %s", repo)
+	log.Printf("Successfully deleted devcontainer %s", id)
 	return nil
 }
