@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+const (
+	DevpodLabelPrefix = "sh.loft.devpod.workspace.id="
+	VscLabelPrefix    = "dev.containers.id="
+)
+
 var devpodExe string
 
 func init() {
@@ -371,9 +376,8 @@ func renameDockerContainer(projectName string) {
 		parts := strings.Split(line, "|")
 		if len(parts) >= 4 {
 			id, name, labels := parts[0], parts[1], parts[3]
-			if name == projectName || 
-				strings.Contains(labels, fmt.Sprintf("sh.loft.devpod.workspace.id=%s", projectName)) ||
-				strings.Contains(labels, fmt.Sprintf("dev.containers.id=%s", projectName)) {
+			if strings.Contains(labels, fmt.Sprintf("%s%s", DevpodLabelPrefix, projectName)) ||
+				strings.Contains(labels, fmt.Sprintf("%s%s", VscLabelPrefix, projectName)) {
 				targetID, currentName = id, name
 				break
 			}
@@ -385,8 +389,25 @@ func renameDockerContainer(projectName string) {
 			if line == "" { continue }
 			parts := strings.Split(line, "|")
 			if len(parts) >= 4 {
+				id, name, labels := parts[0], parts[1], parts[3]
+				if name == projectName {
+					// Only use name match if it doesn't explicitly belong to another workspace
+					if !strings.Contains(labels, DevpodLabelPrefix) && !strings.Contains(labels, VscLabelPrefix) {
+						targetID, currentName = id, name
+						break
+					}
+				}
+			}
+		}
+	}
+
+	if targetID == "" {
+		for _, line := range lines {
+			if line == "" { continue }
+			parts := strings.Split(line, "|")
+			if len(parts) >= 4 {
 				id, name, image, labels := parts[0], parts[1], parts[2], parts[3]
-				if strings.Contains(labels, "sh.loft.devpod.workspace.id=") || strings.Contains(labels, "dev.containers.id=") {
+				if strings.Contains(labels, DevpodLabelPrefix) || strings.Contains(labels, VscLabelPrefix) {
 					continue
 				}
 				if strings.Contains(image, "devpod-") && name != projectName {
@@ -403,7 +424,7 @@ func renameDockerContainer(projectName string) {
 			parts := strings.Split(line, "|")
 			if len(parts) >= 4 {
 				id, name, image, labels := parts[0], parts[1], parts[2], parts[3]
-				if strings.Contains(labels, "sh.loft.devpod.workspace.id=") || strings.Contains(labels, "dev.containers.id=") {
+				if strings.Contains(labels, DevpodLabelPrefix) || strings.Contains(labels, VscLabelPrefix) {
 					continue
 				}
 				if strings.Contains(image, "vsc-content") && name != projectName {
@@ -445,8 +466,8 @@ func isContainerRunning(projectName string) bool {
 			if name == projectName {
 				return true
 			}
-			if strings.Contains(labels, fmt.Sprintf("sh.loft.devpod.workspace.id=%s", projectName)) ||
-				strings.Contains(labels, fmt.Sprintf("dev.containers.id=%s", projectName)) {
+			if strings.Contains(labels, fmt.Sprintf("%s%s", DevpodLabelPrefix, projectName)) ||
+				strings.Contains(labels, fmt.Sprintf("%s%s", VscLabelPrefix, projectName)) {
 				return true
 			}
 		}
