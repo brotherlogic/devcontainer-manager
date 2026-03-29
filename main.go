@@ -371,7 +371,8 @@ func renameDockerContainer(projectName string) {
 		parts := strings.Split(line, "|")
 		if len(parts) >= 4 {
 			id, name, labels := parts[0], parts[1], parts[3]
-			if strings.Contains(labels, fmt.Sprintf("sh.loft.devpod.workspace.id=%s", projectName)) ||
+			if name == projectName || 
+				strings.Contains(labels, fmt.Sprintf("sh.loft.devpod.workspace.id=%s", projectName)) ||
 				strings.Contains(labels, fmt.Sprintf("dev.containers.id=%s", projectName)) {
 				targetID, currentName = id, name
 				break
@@ -383,8 +384,11 @@ func renameDockerContainer(projectName string) {
 		for _, line := range lines {
 			if line == "" { continue }
 			parts := strings.Split(line, "|")
-			if len(parts) >= 3 {
-				id, name, image := parts[0], parts[1], parts[2]
+			if len(parts) >= 4 {
+				id, name, image, labels := parts[0], parts[1], parts[2], parts[3]
+				if strings.Contains(labels, "sh.loft.devpod.workspace.id=") || strings.Contains(labels, "dev.containers.id=") {
+					continue
+				}
 				if strings.Contains(image, "devpod-") && name != projectName {
 					targetID, currentName = id, name
 					break
@@ -397,8 +401,11 @@ func renameDockerContainer(projectName string) {
 		for _, line := range lines {
 			if line == "" { continue }
 			parts := strings.Split(line, "|")
-			if len(parts) >= 3 {
-				id, name, image := parts[0], parts[1], parts[2]
+			if len(parts) >= 4 {
+				id, name, image, labels := parts[0], parts[1], parts[2], parts[3]
+				if strings.Contains(labels, "sh.loft.devpod.workspace.id=") || strings.Contains(labels, "dev.containers.id=") {
+					continue
+				}
 				if strings.Contains(image, "vsc-content") && name != projectName {
 					targetID, currentName = id, name
 					break
