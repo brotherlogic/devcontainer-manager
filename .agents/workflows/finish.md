@@ -14,7 +14,7 @@ When finishing a task, run the following steps:
    `git checkout -b <descriptive-branch-name>`
 
 // turbo
-4. Commit the changes:
+4. Commit the changes and reference any associated issue in the issue list:
    `git commit -am "<descriptive commit message>"`
 
 // turbo
