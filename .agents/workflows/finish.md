@@ -27,4 +27,4 @@ When finishing a task, run the following steps:
 
 8. Wait for the review to appear and make an adjustment to the existing code to address the review
 
-9. Push this change.
+9. Push this change to the same branch.
