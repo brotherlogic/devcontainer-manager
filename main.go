@@ -18,10 +18,14 @@ const (
 	VscLabelPrefix    = "dev.containers.id="
 )
 
-var devpodExe string
+var (
+	devpodExe string
+	ideChoice string
+)
 
 func init() {
 	flag.StringVar(&devpodExe, "devpod-exe", "devpod-cli", "The executable name for devpod")
+	flag.StringVar(&ideChoice, "ide", "none", "The IDE to use for devcontainers")
 }
 
 type Commit struct {
@@ -316,7 +320,7 @@ func recreateDevcontainer(repo string, currentWorkspaces map[string]Workspace) e
 	}
 
 	log.Printf("Creating new devcontainer for %s with id %s...", repo, projectName)
-	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName)
+	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName, "--ide", ideChoice)
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
 
@@ -338,7 +342,7 @@ func bringUpDevcontainer(repo string, currentWorkspaces map[string]Workspace) er
 	projectName := filepath.Base(repo)
 
 	log.Printf("Bringing up devcontainer for %s with id %s...", repo, projectName)
-	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName)
+	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName, "--ide", ideChoice)
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
 
