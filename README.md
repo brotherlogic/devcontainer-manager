@@ -20,4 +20,10 @@ This script will:
 2. Move the built binary to `/usr/local/bin`
 3. Configure a systemd user service based on `service-file`
 4. Enable lingering for your user so that the service runs in the background even when you are not logged in
-5. Enable and start the systemd service\n## Robust Container Renaming\nThe daemon automatically ensures that the underlying Docker containers perfectly match their corresponding project names, even when multiple disjoint environments run simultaneously, by referencing their dedicated workspace IDs.
+5. Enable and start the systemd service
+
+## Robust Container Renaming
+The daemon automatically ensures that the underlying Docker containers perfectly match their corresponding project names, even when multiple disjoint environments run simultaneously, by referencing their dedicated workspace IDs.
+
+## Supported Projects
+Adding support for `brotherlogic/recordcollection` and its specific environment needs.
