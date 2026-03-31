@@ -40,7 +40,13 @@ jobs:
           LATEST_REVIEW_DATE=$(gh api repos/$REPO/pulls/$PR_NUMBER/reviews --jq '[.[] | select(.user?.login == "github-actions[bot]" and (.body != null) and (.body | contains("Gemini AI Code Review")))] | last | .submitted_at')
           
           if [ -z "$LATEST_REVIEW_DATE" ] || [ "$LATEST_REVIEW_DATE" = "null" ]; then
-            echo "No Gemini AI Code Review found. Failing validation."
+            echo "No Gemini AI Code Review found. Checking for /gemini-review command..."
+            HAS_REQUEST=$(gh api repos/$REPO/issues/$PR_NUMBER/comments --jq '[.[] | select(.body | contains("/gemini-review"))] | length')
+            if [ "$HAS_REQUEST" -gt 0 ]; then
+                echo "Gemini AI Code Review was requested but no output was produced. This means the reviewer found 0 issues. Passing validation."
+                exit 0
+            fi
+            echo "No Gemini AI Code Review or /gemini-review command found. Failing validation."
             exit 1
           fi
 

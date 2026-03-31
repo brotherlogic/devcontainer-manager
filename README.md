@@ -1,7 +1,6 @@
 # Devcontainer Manager
 
-This project pulls in a list of github sourced devcontainers, stored in the container.list file. It then periodically checks github for updates
-and if it detects that the devcontainer configuration has changed, it will delete and recreate the new container with the updated configuration.
+The manager periodically checks GitHub for updates. If it detects changes in the devcontainer configuration, it automatically deletes and recreates the container. By default, it uses `--ide none` to prevent the IDE from automatically launching, though this can be configured using the `--ide` command-line flag.
 
 *It actively synchronizes the local `container.list` with the remote `container.list.template` configuration. Any local devcontainers removed from the template will be gracefully detected and removed from the active system.*
 
@@ -23,4 +22,10 @@ This script will:
 2. Move the built binary to `/usr/local/bin`
 3. Configure a systemd user service based on `service-file`
 4. Enable lingering for your user so that the service runs in the background even when you are not logged in
-5. Enable and start the systemd service\n## Robust Container Renaming\nThe daemon automatically ensures that the underlying Docker containers perfectly match their corresponding project names, even when multiple disjoint environments run simultaneously, by referencing their dedicated workspace IDs.
+5. Enable and start the systemd service
+
+## Robust Container Renaming
+The daemon automatically ensures that the underlying Docker containers perfectly match their corresponding project names, even when multiple disjoint environments run simultaneously, by referencing their dedicated workspace IDs.
+
+## Supported Projects
+Adding support for `brotherlogic/recordcollection` and its specific environment needs.
