@@ -320,6 +320,7 @@ func recreateDevcontainer(repo string, currentWorkspaces map[string]Workspace) e
 	}
 
 	log.Printf("Creating new devcontainer for %s with id %s...", repo, projectName)
+	log.Printf("Running command: %s up %s --id %s --build-no-cache --ide %s", devpodExe, fmt.Sprintf("github.com/%s", repo), projectName, ideChoice)
 	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName, "--build-no-cache", "--ide", ideChoice)
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
@@ -342,6 +343,7 @@ func bringUpDevcontainer(repo string, currentWorkspaces map[string]Workspace) er
 	projectName := filepath.Base(repo)
 
 	log.Printf("Bringing up devcontainer for %s with id %s...", repo, projectName)
+	log.Printf("Running command: %s up %s --id %s --ide %s --build-no-cache", devpodExe, fmt.Sprintf("github.com/%s", repo), projectName, ideChoice)
 	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName, "--ide", ideChoice, "--build-no-cache")
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
