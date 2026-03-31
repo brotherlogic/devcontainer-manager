@@ -4,8 +4,10 @@ The manager periodically checks GitHub for updates. If it detects changes in the
 
 *It actively synchronizes the local `container.list` with the remote `container.list.template` configuration. Any local devcontainers removed from the template will be gracefully detected and removed from the active system.*
 
-It assumes the existance of the gh cli for detecting changes to the devcontainer configuration. And additionally assumes that the user has devpod
-cli installed for managing devcontainers and running them. Project is written in golang, using the latest standards. 
+cli installed for managing devcontainers and running them. Project is written in golang, using the latest standards.
+
+## Build Consistency
+The daemon enforces absolute build consistency by invoking DevPod with the `--build-no-cache` parameter. As a result, restarting or updating a devcontainer will always result in a completely fresh build drawn from the latest source image rather than an improperly cached Docker layer.
 
 ## Installation
 
