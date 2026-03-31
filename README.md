@@ -7,7 +7,7 @@ The manager periodically checks GitHub for updates. If it detects changes in the
 cli installed for managing devcontainers and running them. Project is written in golang, using the latest standards.
 
 ## Build Consistency
-The daemon enforces absolute build consistency by invoking DevPod with the `--build-no-cache` parameter. As a result, restarting or updating a devcontainer will always result in a completely fresh build drawn from the latest source image rather than an improperly cached Docker layer.
+The daemon enforces configuration consistency by invoking DevPod with the `--recreate` parameter. As a result, restarting or updating a devcontainer will always result in a fresh build drawn from the latest configuration rather than an outdated container state.
 
 ## Installation
 
