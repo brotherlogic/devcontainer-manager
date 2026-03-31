@@ -18,10 +18,14 @@ const (
 	VscLabelPrefix    = "dev.containers.id="
 )
 
-var devpodExe string
+var (
+	devpodExe string
+	ideChoice string
+)
 
 func init() {
 	flag.StringVar(&devpodExe, "devpod-exe", "devpod-cli", "The executable name for devpod")
+	flag.StringVar(&ideChoice, "ide", "none", "The IDE to use for devcontainers")
 }
 
 type Commit struct {
@@ -29,8 +33,8 @@ type Commit struct {
 }
 
 type Workspace struct {
-	ID     string `json:"id"`
-	UID    string `json:"uid"`
+	ID     string `json:"id"`     // Human-readable ID (project-name)
+	UID    string `json:"uid"`    // Devpod internal unique ID (matches dev.containers.id label)
 	Source Source `json:"source"`
 }
 
@@ -316,7 +320,7 @@ func recreateDevcontainer(repo string, currentWorkspaces map[string]Workspace) e
 	}
 
 	log.Printf("Creating new devcontainer for %s with id %s...", repo, projectName)
-	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName)
+	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName, "--ide", ideChoice)
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
 
@@ -325,7 +329,10 @@ func recreateDevcontainer(repo string, currentWorkspaces map[string]Workspace) e
 	}
 
 	// Refresh workspaces to get the new UID if it changed (it shouldn't for the same ID, but safe)
-	newWorkspaces, _ := getExistingWorkspaces()
+	newWorkspaces, err := getExistingWorkspaces()
+	if err != nil {
+		return fmt.Errorf("failed to refresh workspaces after up: %w", err)
+	}
 	renameDockerContainer(projectName, newWorkspaces)
 
 	return nil
@@ -335,7 +342,7 @@ func bringUpDevcontainer(repo string, currentWorkspaces map[string]Workspace) er
 	projectName := filepath.Base(repo)
 
 	log.Printf("Bringing up devcontainer for %s with id %s...", repo, projectName)
-	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName)
+	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName, "--ide", ideChoice)
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
 
@@ -344,7 +351,10 @@ func bringUpDevcontainer(repo string, currentWorkspaces map[string]Workspace) er
 	}
 
 	// Refresh workspaces to get the new UID
-	newWorkspaces, _ := getExistingWorkspaces()
+	newWorkspaces, err := getExistingWorkspaces()
+	if err != nil {
+		return fmt.Errorf("failed to refresh workspaces after up: %w", err)
+	}
 	renameDockerContainer(projectName, newWorkspaces)
 
 	return nil
@@ -438,8 +448,10 @@ func renameDockerContainer(projectName string, currentWorkspaces map[string]Work
 				}
 
 				if strings.Contains(image, "devpod-") || strings.Contains(image, "vsc-") {
-					targetID, currentName = id, name
-					break
+					if name != projectName {
+						targetID, currentName = id, name
+						break
+					}
 				}
 			}
 		}
@@ -484,6 +496,10 @@ func isContainerRunning(projectName string, currentWorkspaces map[string]Workspa
 				return true
 			}
 			if targetUID != "" && strings.Contains(labels, fmt.Sprintf("%s%s", VscLabelPrefix, targetUID)) {
+				return true
+			}
+			// Fallback: also check DevpodLabelPrefix for old versions or specific provider metadata
+			if strings.Contains(labels, fmt.Sprintf("%s%s", DevpodLabelPrefix, projectName)) {
 				return true
 			}
 		}
