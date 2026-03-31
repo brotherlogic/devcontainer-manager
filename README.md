@@ -7,7 +7,7 @@ The manager periodically checks GitHub for updates. If it detects changes in the
 cli installed for managing devcontainers and running them. Project is written in golang, using the latest standards.
 
 ## Build Consistency
-The daemon enforces absolute build consistency by invoking DevPod with the `--build-no-cache` parameter. As a result, restarting or updating a devcontainer will always result in a completely fresh build drawn from the latest source image rather than an improperly cached Docker layer.
+The daemon enforces configuration consistency by invoking DevPod with the `--recreate` parameter. As a result, restarting or updating a devcontainer will always result in a fresh build drawn from the latest configuration rather than an outdated container state.
 
 ## Installation
 
@@ -29,5 +29,6 @@ The daemon automatically ensures that the underlying Docker containers perfectly
 
 ## Supported Projects
 Adding support for `brotherlogic/recordcollection` and its specific environment needs.
+
 ## Improved Observability
 The manager now logs the full `devpod-cli up` command it executes when starting or recreating a container. This provides better visibility into the background operations and simplifies debugging of the container lifecycle.
