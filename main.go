@@ -33,8 +33,8 @@ type Commit struct {
 }
 
 type Workspace struct {
-	ID     string `json:"id"`     // Human-readable ID (project-name)
-	UID    string `json:"uid"`    // Devpod internal unique ID (matches dev.containers.id label)
+	ID     string `json:"id"`  // Human-readable ID (project-name)
+	UID    string `json:"uid"` // Devpod internal unique ID (matches dev.containers.id label)
 	Source Source `json:"source"`
 }
 
@@ -99,7 +99,7 @@ func checkDevPodProvider() error {
 
 func checkRepos(trackedSHAs map[string]string) {
 	configPath := filepath.Join(getConfigDir(), "container.list")
-	
+
 	log.Printf("Syncing container list from remote template...")
 	if err := pullTemplateFromGitHub(configPath); err != nil {
 		log.Printf("Warning: failed to sync container.list from template: %v", err)
@@ -320,7 +320,7 @@ func recreateDevcontainer(repo string, currentWorkspaces map[string]Workspace) e
 	}
 
 	log.Printf("Creating new devcontainer for %s with id %s...", repo, projectName)
-	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName, "--recreate", "--ide", ideChoice)
+	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName, "--reset", "--ide", ideChoice)
 	log.Printf("Running command: %s", strings.Join(upCmd.Args, " "))
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
@@ -343,7 +343,7 @@ func bringUpDevcontainer(repo string, currentWorkspaces map[string]Workspace) er
 	projectName := filepath.Base(repo)
 
 	log.Printf("Bringing up devcontainer for %s with id %s...", repo, projectName)
-	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName, "--ide", ideChoice, "--recreate")
+	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName, "--ide", ideChoice, "--reset")
 	log.Printf("Running command: %s", strings.Join(upCmd.Args, " "))
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
@@ -523,7 +523,7 @@ func deleteDevcontainerByID(id string) error {
 	if err != nil {
 		return fmt.Errorf("%s delete failed: %w (output: %s)", devpodExe, err, string(deleteOut))
 	}
-	
+
 	log.Printf("Successfully deleted devcontainer %s", id)
 	return nil
 }
