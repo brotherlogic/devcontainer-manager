@@ -3,6 +3,10 @@ name: Validate PR
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_run:
+    workflows: ["Gemini AI PR Reviewer"]
+    types:
+      - completed
 
 jobs:
   validate:
@@ -13,6 +17,19 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+      
+      - name: Ensure PR Code
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            PR_NUMBER=$(gh pr list -s open --limit 1 --json number --jq '.[0].number')
+            echo "Triggered by workflow_run. PR is $PR_NUMBER"
+            gh pr checkout $PR_NUMBER
+            echo "PR_NUMBER=$PR_NUMBER" >> $GITHUB_ENV
+          else
+            echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+          fi
       
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -28,7 +45,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PR_NUMBER=${{ github.event.pull_request.number }}
           REPO=${{ github.repository }}
 
           echo "Fetching latest commit timestamp..."
