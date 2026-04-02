@@ -28,7 +28,8 @@ This script will:
 The daemon automatically ensures that the underlying Docker containers perfectly match their corresponding project names, even when multiple disjoint environments run simultaneously, by referencing their dedicated workspace IDs.
 
 ## Supported Projects
-Adding support for `brotherlogic/recordcollection` and its specific environment needs.
+Adding support for `brotherlogic/recordcollection` and `brotherlogic/sale-description-generator` and their specific environment needs.
+
 
 ## Improved Observability
 The manager now logs the full `devpod-cli up` command it executes when starting or recreating a container. This provides better visibility into the background operations and simplifies debugging of the container lifecycle.
