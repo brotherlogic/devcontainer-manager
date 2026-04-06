@@ -22,5 +22,6 @@
 		"${localWorkspaceFolder}/.devcontainer/.env.auth"
 	],
 	"updateRemoteUserUID": true,
-	"remoteUser": "vscode"
+    "remoteUser": "vscode",
+    "workspaceFolder": "/workspaces/devcontainer-manager",
 }
