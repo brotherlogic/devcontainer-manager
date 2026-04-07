@@ -29,6 +29,7 @@ The daemon automatically ensures that the underlying Docker containers perfectly
 
 ## Supported Projects
 Adding support for `brotherlogic/recordcollection`, `brotherlogic/sale-description-generator`, `brotherlogic/recordalerting`, and `brotherlogic/focus` and their specific environment needs.
+Adding support for `brotherlogic/recordcollection`, `brotherlogic/sale-description-generator`, `brotherlogic/recordalerting`, and `brotherlogic/godiscogs` and their specific environment needs.
 
 ## Improved Observability
 The manager now logs the full `devpod-cli up` command it executes when starting or recreating a container. This provides better visibility into the background operations and simplifies debugging of the container lifecycle.
