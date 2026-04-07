@@ -28,6 +28,7 @@ This script will:
 The daemon automatically ensures that the underlying Docker containers perfectly match their corresponding project names, even when multiple disjoint environments run simultaneously, by referencing their dedicated workspace IDs.
 
 ## Supported Projects
+Adding support for `brotherlogic/recordcollection`, `brotherlogic/sale-description-generator`, `brotherlogic/recordalerting`, and `brotherlogic/focus` and their specific environment needs.
 Adding support for `brotherlogic/recordcollection`, `brotherlogic/sale-description-generator`, `brotherlogic/recordalerting`, and `brotherlogic/godiscogs` and their specific environment needs.
 
 ## Improved Observability
