@@ -55,7 +55,7 @@ func main() {
 	}
 
 	// Track the last seen commit for each repo
-	trackedSHAs := make(map[string]string)
+	trackedSHAs := loadTrackedSHAs()
 
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
@@ -142,6 +142,7 @@ func checkRepos(trackedSHAs map[string]string) {
 						delete(trackedSHAs, repo)
 					}
 				}
+				saveTrackedSHAs(trackedSHAs)
 			}
 		}
 	}
@@ -227,6 +228,26 @@ func getConfigDir() string {
 	return configDir
 }
 
+func loadTrackedSHAs() map[string]string {
+	trackerPath := filepath.Join(getConfigDir(), "tracked_shas.json")
+	shas := make(map[string]string)
+
+	bytes, err := os.ReadFile(trackerPath)
+	if err == nil {
+		json.Unmarshal(bytes, &shas)
+	}
+	return shas
+}
+
+func saveTrackedSHAs(shas map[string]string) error {
+	trackerPath := filepath.Join(getConfigDir(), "tracked_shas.json")
+	bytes, err := json.MarshalIndent(shas, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(trackerPath, bytes, 0644)
+}
+
 func checkRepo(repo string, trackedSHAs map[string]string, currentWorkspaces map[string]Workspace) {
 	log.Printf("Checking %s for devcontainer updates...", repo)
 
@@ -243,12 +264,13 @@ func checkRepo(repo string, trackedSHAs map[string]string, currentWorkspaces map
 
 	lastSeen, exists := trackedSHAs[repo]
 	if !exists {
-		log.Printf("Initial tracking for %s at commit state %s. Bringing up container...", repo, latestSHA)
-		if err := bringUpDevcontainer(repo, currentWorkspaces); err != nil {
-			notifyError("Failed to bring up devcontainer for %s: %v", repo, err)
+		log.Printf("Initial tracking (or cache invalidated) for %s at commit state %s. Recreating container...", repo, latestSHA)
+		if err := recreateDevcontainer(repo, currentWorkspaces); err != nil {
+			notifyError("Failed to recreate devcontainer for %s: %v", repo, err)
 			return
 		}
 		trackedSHAs[repo] = latestSHA
+		saveTrackedSHAs(trackedSHAs)
 		return
 	}
 
@@ -262,6 +284,7 @@ func checkRepo(repo string, trackedSHAs map[string]string, currentWorkspaces map
 		}
 
 		trackedSHAs[repo] = latestSHA
+		saveTrackedSHAs(trackedSHAs)
 		log.Printf("Successfully updated devcontainer for %s", repo)
 	} else {
 		projectName := filepath.Base(repo)
@@ -343,7 +366,7 @@ func bringUpDevcontainer(repo string, currentWorkspaces map[string]Workspace) er
 	projectName := filepath.Base(repo)
 
 	log.Printf("Bringing up devcontainer for %s with id %s...", repo, projectName)
-	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName, "--ide", ideChoice, "--reset")
+	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName, "--ide", ideChoice)
 	log.Printf("Running command: %s", strings.Join(upCmd.Args, " "))
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
