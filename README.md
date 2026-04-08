@@ -6,8 +6,10 @@ The manager periodically checks GitHub for updates. If it detects changes in the
 
 cli installed for managing devcontainers and running them. Project is written in golang, using the latest standards.
 
-## Build Consistency
-The daemon enforces configuration consistency by invoking DevPod with the `--recreate` parameter. As a result, restarting or updating a devcontainer will always result in a fresh build drawn from the latest configuration rather than an outdated container state.
+## Configuration Tracking & Caching
+The daemon automatically tracks GitHub commits of the `.devcontainer` configuration files to seamlessly restart existing devpod containers without unnecessarily rebuilding them.
+
+Configurations are actively tracked via a state file (`~/.config/devcontainer-manager/tracked_shas.json`). To force a hard container rebuild, simply delete this JSON file to bypass the state. Rebuilds are otherwise automatic whenever remote repository devcontainer files are updated.
 
 ## Installation
 
