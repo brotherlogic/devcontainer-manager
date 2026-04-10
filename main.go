@@ -343,7 +343,7 @@ func recreateDevcontainer(repo string, currentWorkspaces map[string]Workspace) e
 	}
 
 	log.Printf("Creating new devcontainer for %s with id %s...", repo, projectName)
-	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName, "--reset", "--ide", ideChoice)
+	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("git@github.com:%s.git", repo), "--id", projectName, "--reset", "--ide", ideChoice)
 	log.Printf("Running command: %s", strings.Join(upCmd.Args, " "))
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
@@ -366,7 +366,7 @@ func bringUpDevcontainer(repo string, currentWorkspaces map[string]Workspace) er
 	projectName := filepath.Base(repo)
 
 	log.Printf("Bringing up devcontainer for %s with id %s...", repo, projectName)
-	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("github.com/%s", repo), "--id", projectName, "--ide", ideChoice)
+	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("git@github.com:%s.git", repo), "--id", projectName, "--ide", ideChoice)
 	log.Printf("Running command: %s", strings.Join(upCmd.Args, " "))
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
