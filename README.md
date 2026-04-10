@@ -34,3 +34,7 @@ Adding support for `brotherlogic/focus`, `brotherlogic/gramophile`, `brotherlogi
 
 ## Improved Observability
 The manager now logs the full `devpod-cli up` command it executes when starting or recreating a container. This provides better visibility into the background operations and simplifies debugging of the container lifecycle.
+
+## SSH for DevPod
+The manager now uses SSH repository URLs (`git@github.com:...`) instead of HTTPS shorthand when calling `devpod-cli up`. This ensures that DevPod utilizes your local SSH credentials for repository operations.
+
