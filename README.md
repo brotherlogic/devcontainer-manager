@@ -41,3 +41,7 @@ The manager now uses SSH repository URLs (`git@github.com:...`) instead of HTTPS
 
 ## Version Tracking
 The manager now prints the git SHA of the build on startup, allowing you to easily identify which version of the code is running. This information is automatically extracted from the build metadata.
+
+## Hooray
+
+Hooray
