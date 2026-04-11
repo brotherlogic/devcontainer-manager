@@ -4,7 +4,7 @@ After=network-online.target
 [Service]
 Type=simple
 # Pull and rebuild on startup
-ExecStartPre=/bin/bash -c "cd %PROJECT_DIR% && (git fetch -p && git merge --ff-only origin/main && %GO_CMD% build -o %h/.local/bin/devcontainer-manager main.go || true)"
+ExecStartPre=/bin/bash -c "cd %PROJECT_DIR% && ((git fetch -p || true) && git merge --ff-only origin/main && %GO_CMD% build -o %h/.local/bin/devcontainer-manager main.go || true)"
 # Assumes the binary is installed here
 ExecStart=%h/.local/bin/devcontainer-manager
 Restart=always
