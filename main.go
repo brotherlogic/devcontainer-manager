@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 )
@@ -44,7 +45,7 @@ type Source struct {
 
 func main() {
 	flag.Parse()
-	log.Println("Starting devcontainer manager...")
+	log.Printf("Starting devcontainer manager (version: %s)...", getVersion())
 
 	if err := checkGHAuth(); err != nil {
 		notifyFatal("GitHub CLI authentication failed: %v", err)
@@ -63,10 +64,28 @@ func main() {
 	// Run initial check immediately
 	checkRepos(trackedSHAs)
 
-	// Loop to check periodically
 	for range ticker.C {
 		checkRepos(trackedSHAs)
 	}
+}
+
+func getVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "dev"
+	}
+
+	for _, setting := range info.Settings {
+		if setting.Key == "vcs.revision" {
+			// Found the git SHA
+			if len(setting.Value) > 7 {
+				return setting.Value[:7]
+			}
+			return setting.Value
+		}
+	}
+
+	return "dev"
 }
 
 func checkGHAuth() error {

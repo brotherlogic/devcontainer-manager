@@ -23,8 +23,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            PR_NUMBER=$(gh pr list -s open --limit 1 --json number --jq '.[0].number')
-            echo "Triggered by workflow_run. PR is $PR_NUMBER"
+            # Attempt to find the PR associated with the branch of the triggering run
+            HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+            PR_NUMBER=$(gh pr list -H "$HEAD_BRANCH" --limit 1 --json number --jq '.[0].number')
+            
+            if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
+              # Fallback to the latest open PR if branch check fails
+              PR_NUMBER=$(gh pr list -s open --limit 1 --json number --jq '.[0].number')
+            fi
+            
+            echo "Triggered by workflow_run ($HEAD_BRANCH). PR identified: $PR_NUMBER"
             gh pr checkout $PR_NUMBER
             echo "PR_NUMBER=$PR_NUMBER" >> $GITHUB_ENV
           else
@@ -59,10 +67,10 @@ jobs:
             echo "No Gemini AI Code Review found. Checking for /gemini-review command..."
             HAS_REQUEST=$(gh api repos/$REPO/issues/$PR_NUMBER/comments --jq '[.[] | select(.body | contains("/gemini-review"))] | length')
             if [ "$HAS_REQUEST" -gt 0 ]; then
-                echo "Gemini AI Code Review was requested but no output was produced. This means the reviewer found 0 issues. Passing validation."
+                echo "Success: Gemini AI Code Review was requested and it correctly found 0 issues (no review object was created)."
                 exit 0
             fi
-            echo "No Gemini AI Code Review or /gemini-review command found. Failing validation."
+            echo "Error: No Gemini AI Code Review or /gemini-review command found. You must request a review before this PR can be validated."
             exit 1
           fi
 
