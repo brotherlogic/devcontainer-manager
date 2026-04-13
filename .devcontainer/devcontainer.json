@@ -14,14 +14,14 @@
 		}
 	},
 	"initializeCommand": "echo \"GH_TOKEN=$(gh auth token)\" > .devcontainer/.env.auth",
-    "runArgs": [
-	"--network=host", 
+	"runArgs": [
+		"--network=host",
 		"--security-opt",
 		"label=disable",
 		"--env-file",
 		"${localWorkspaceFolder}/.devcontainer/.env.auth"
 	],
 	"updateRemoteUserUID": true,
-    "remoteUser": "vscode",
-    "workspaceFolder": "/workspaces/devcontainer-manager",
+	"remoteUser": "vscode",
+	"workspaceFolder": "/workspaces/devcontainer-manager"
 }
