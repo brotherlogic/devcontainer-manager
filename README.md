@@ -38,3 +38,10 @@ The manager now logs the full `devpod-cli up` command it executes when starting 
 ## SSH for DevPod
 The manager now uses SSH repository URLs (`git@github.com:...`) instead of HTTPS shorthand when calling `devpod-cli up`. This ensures that DevPod utilizes your local SSH credentials for repository operations.
 
+
+## Version Tracking
+The manager now prints the git SHA of the build on startup, allowing you to easily identify which version of the code is running. This information is automatically extracted from the build metadata.
+
+## Hooray
+
+Hooray
