@@ -42,6 +42,9 @@ The manager now uses SSH repository URLs (`git@github.com:...`) instead of HTTPS
 ## Version Tracking
 The manager now prints the git SHA of the build on startup, allowing you to easily identify which version of the code is running. This information is automatically extracted from the build metadata.
 
+## Container Prioritization
+The manager dynamically orders container startup operations, prioritizing repositories that have been most recently updated (pushed) on GitHub. This ensures the projects you are actively working on are spun up first.
+
 ## Hooray
 
 Hooray
