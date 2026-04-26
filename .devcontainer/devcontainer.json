@@ -4,7 +4,8 @@
 		"dockerfile": "Dockerfile"
 	},
 	"features": {
-		"ghcr.io/devcontainers/features/github-cli:1": {}
+		"ghcr.io/devcontainers/features/github-cli:1": {},
+      "ghcr.io/siri404/devcontainer-ai-features/gemini-cli:1": {},
 	},
 	"customizations": {
 		"vscode": {
@@ -24,4 +25,13 @@
 	"updateRemoteUserUID": true,
 	"remoteUser": "vscode",
 	"workspaceFolder": "/workspaces/devcontainer-manager"
+	    "mounts": [
+        {
+            "source": "${localEnv:HOME}/.ssh",
+            "target": "/home/vscode/.ssh", // Adjust "vscode" to your container's non-root user (e.g., "node", "user")
+            "type": "bind",
+            "options": "readonly" // Optional: makes keys read-only in container
+        },
+	"source=${localEnv:HOME}/.gemini,target=/home/vscode/.gemini,type=bind"
+    ],
 }
