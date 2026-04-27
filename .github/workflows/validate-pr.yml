@@ -3,10 +3,6 @@ name: Validate PR
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-    paths:
-      - '**.go'
-      - 'go.mod'
-      - 'go.sum'
   workflow_run:
     workflows: ["Gemini AI PR Reviewer"]
     types:
@@ -23,6 +19,7 @@ jobs:
         uses: actions/checkout@v4
       
       - name: Ensure PR Code
+        id: ensure_pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -42,18 +39,39 @@ jobs:
           else
             echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
           fi
+
+          # Detect Go changes
+          BASE_BRANCH="main"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+             BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
+          fi
+          
+          echo "Comparing against $BASE_BRANCH"
+          git fetch origin $BASE_BRANCH --depth=1
+          CHANGED_GO_FILES=$(git diff --name-only origin/$BASE_BRANCH...HEAD | grep -E '\.go$|go\.mod|go\.sum' || true)
+          
+          if [ -n "$CHANGED_GO_FILES" ]; then
+            echo "go_changed=true" >> $GITHUB_OUTPUT
+            echo "Go files changed: $CHANGED_GO_FILES"
+          else
+            echo "go_changed=false" >> $GITHUB_OUTPUT
+            echo "No Go files changed."
+          fi
       
       - name: Setup Go
+        if: steps.ensure_pr.outputs.go_changed == 'true'
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
 
       - name: Build and Vet
+        if: steps.ensure_pr.outputs.go_changed == 'true'
         run: |
           go build -v ./...
           go vet ./...
 
       - name: Check AI Review Addressed
+        if: steps.ensure_pr.outputs.go_changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
