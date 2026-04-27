@@ -21,7 +21,7 @@ When finishing a task, run the following steps:
 5. Push the changes to the newly created branch:
    `git push -u origin HEAD`
 
-6. Find the newly pushed branch in a Pull Request using the gh tool - this may require some retries
+6. Wait for the automated GitHub workflow to create the Pull Request (do not create it manually). Find the newly created Pull Request using the gh tool.
 
 7. Trigger a review by posting a comment to the Pull Request '/gemini-review' 
 
