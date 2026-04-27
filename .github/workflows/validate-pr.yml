@@ -3,6 +3,10 @@ name: Validate PR
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
   workflow_run:
     workflows: ["Gemini AI PR Reviewer"]
     types:
