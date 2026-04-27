@@ -1,6 +1,5 @@
 package main
 
-// dummy comment for CI validation
 import (
 	"bufio"
 	"encoding/json"
