@@ -1,9 +1,7 @@
 {
 	"name": "Devcontainer Manager",
-	"build": {
-		"dockerfile": "Dockerfile"
-	},
-	"features": {
+    "image": "mcr.microsoft.com/devcontainers/base:noble",
+    "features": {
 		"ghcr.io/devcontainers/features/github-cli:1": {},
       "ghcr.io/siri404/devcontainer-ai-features/gemini-cli:1": {}
 	},
