@@ -5,7 +5,7 @@
 	},
 	"features": {
 		"ghcr.io/devcontainers/features/github-cli:1": {},
-		"ghcr.io/siri404/devcontainer-ai-features/gemini-cli:1": {}
+      "ghcr.io/siri404/devcontainer-ai-features/gemini-cli:1": {}
 	},
 	"customizations": {
 		"vscode": {
