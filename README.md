@@ -45,5 +45,3 @@ The manager now prints the git SHA of the build on startup, allowing you to easi
 ## Hooray
 
 Hooray
-
-// dummy comment for CI validation
