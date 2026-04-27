@@ -5,7 +5,7 @@
 	},
 	"features": {
 		"ghcr.io/devcontainers/features/github-cli:1": {},
-      "ghcr.io/siri404/devcontainer-ai-features/gemini-cli:1": {}
+		"ghcr.io/siri404/devcontainer-ai-features/gemini-cli:1": {}
 	},
 	"customizations": {
 		"vscode": {
@@ -24,14 +24,20 @@
 	],
 	"updateRemoteUserUID": true,
 	"remoteUser": "vscode",
-    "workspaceFolder": "/workspaces/devcontainer-manager",
-	    "mounts": [
-        {
-            "source": "${localEnv:HOME}/.ssh",
-            "target": "/home/vscode/.ssh", 
-            "type": "bind",
-            "options": "readonly"
-        },
-	"source=${localEnv:HOME}/.gemini,target=/home/vscode/.gemini,type=bind"
-    ]
+	"workspaceFolder": "/workspaces/devcontainer-manager",
+	"mounts": [
+		{
+			"source": "${localEnv:HOME}/.ssh",
+			"target": "/home/vscode/.ssh",
+			"type": "bind",
+			"options": [
+				"readonly"
+			]
+		},
+		{
+			"source": "${localEnv:HOME}/.gemini",
+			"target": "/home/vscode/.gemini",
+			"type": "bind"
+		}
+	]
 }
