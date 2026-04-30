@@ -39,7 +39,7 @@ type PortMapping struct {
 }
 
 type ContainerMapping struct {
-	Port int `json:"port"`
+	HostPort int `json:"hostPort"`
 }
 
 type Workspace struct {
@@ -137,18 +137,18 @@ func saveAndPushMappings(mappings PortMapping) error {
 
 func allocatePort(projectName string, mappings *PortMapping) int {
 	if m, ok := mappings.Containers[projectName]; ok {
-		return m.Port
+		return m.HostPort
 	}
 
 	maxPort := 2221
 	for _, m := range mappings.Containers {
-		if m.Port > maxPort {
-			maxPort = m.Port
+		if m.HostPort > maxPort {
+			maxPort = m.HostPort
 		}
 	}
 
 	newPort := maxPort + 1
-	mappings.Containers[projectName] = ContainerMapping{Port: newPort}
+	mappings.Containers[projectName] = ContainerMapping{HostPort: newPort}
 	return newPort
 }
 
