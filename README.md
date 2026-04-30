@@ -39,7 +39,7 @@ The manager now logs the full `devpod-cli up` command it executes when starting 
 The manager now uses SSH repository URLs (`git@github.com:...`) instead of HTTPS shorthand when calling `devpod-cli up`. This ensures that DevPod utilizes your local SSH credentials for repository operations.
 
 ## Port Mapping & Discovery Support
-The manager automatically allocates a unique SSH port for each devcontainer (starting from 2222) and maps it to the container's SSH port (22) using `--docker-run-args`. 
+The manager automatically allocates a unique SSH port for each devcontainer (starting from 2222) and maps it to the container's SSH port (22) using `--provider-option DOCKER_RUN_ARGS=`. 
 
 Allocated ports are advertised by pushing a `mappings.json` file to the `brotherlogic/devcontainer-manager` repository. The manager automatically generates and registers an SSH deploy key to bypass pull request requirements for these updates. This allows tools like `dcrouter` to discover and route SSH connections to the correct container.
 
