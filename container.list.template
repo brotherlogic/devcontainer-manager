@@ -1,3 +1,4 @@
+# List of devcontainers to be managed and synced
 brotherlogic/beerkellar
 brotherlogic/dcrouter
 brotherlogic/devcontainer-manager
@@ -10,6 +11,7 @@ brotherlogic/music
 brotherlogic/prod
 brotherlogic/recordalerting
 brotherlogic/recordcollection
+brotherlogic/recorder
 brotherlogic/recordgetter
 brotherlogic/sale-description-generator
 brotherlogic/seraphine
