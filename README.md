@@ -50,4 +50,4 @@ The manager now prints the git SHA of the build on startup, allowing you to easi
 
 Hooray
 
-// dummy comment for CI validation
+// dummy comment for recordcleaner CI validation
