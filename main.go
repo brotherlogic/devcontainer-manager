@@ -203,10 +203,10 @@ func checkRepos(trackedSHAs map[string]string, mappings PortMapping) {
 	configPath := filepath.Join(getConfigDir(), "container.list")
 
 	log.Printf("Syncing container list from remote template...")
-	if err := pullTemplateFromGitHub(configPath); err != nil {
-		log.Printf("Warning: failed to sync container.list from template: %v", err)
-		// We'll continue with the local container.list if it exists
-	}
+	// if err := pullTemplateFromGitHub(configPath); err != nil {
+	// 	log.Printf("Warning: failed to sync container.list from template: %v", err)
+	// 	// We'll continue with the local container.list if it exists
+	// }
 
 	repos, err := readContainerList()
 	if err != nil {
@@ -466,7 +466,7 @@ func recreateDevcontainer(repo string, currentWorkspaces map[string]Workspace, p
 	}
 
 	log.Printf("Creating new devcontainer for %s with id %s on port %d...", repo, projectName, port)
-	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("git@github.com:%s.git", repo), "--id", projectName, "--reset", "--ide", ideChoice, "--docker-run-args", fmt.Sprintf("-p %d:22", port))
+	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("git@github.com:%s.git", repo), "--id", projectName, "--reset", "--ide", ideChoice, "--provider-option", fmt.Sprintf("DOCKER_RUN_ARGS=-p %d:22", port))
 	log.Printf("Running command: %s", strings.Join(upCmd.Args, " "))
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
@@ -489,7 +489,7 @@ func bringUpDevcontainer(repo string, currentWorkspaces map[string]Workspace, po
 	projectName := filepath.Base(repo)
 
 	log.Printf("Bringing up devcontainer for %s with id %s on port %d...", repo, projectName, port)
-	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("git@github.com:%s.git", repo), "--id", projectName, "--ide", ideChoice, "--docker-run-args", fmt.Sprintf("-p %d:22", port))
+	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("git@github.com:%s.git", repo), "--id", projectName, "--ide", ideChoice, "--provider-option", fmt.Sprintf("DOCKER_RUN_ARGS=-p %d:22", port))
 	log.Printf("Running command: %s", strings.Join(upCmd.Args, " "))
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
