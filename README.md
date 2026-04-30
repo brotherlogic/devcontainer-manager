@@ -41,7 +41,7 @@ The manager now uses SSH repository URLs (`git@github.com:...`) instead of HTTPS
 ## Port Mapping & Discovery Support
 The manager automatically allocates a unique SSH port for each devcontainer (starting from 2222) and maps it to the container's SSH port (22) using `--provider-option DOCKER_RUN_ARGS=`. 
 
-Allocated ports are advertised by pushing a `mappings.json` file to the `brotherlogic/devcontainer-manager` repository. This allows tools like `dcrouter` to discover and route SSH connections to the correct container.
+Allocated ports are advertised by pushing a `mappings.json` file to the `brotherlogic/devcontainer-manager` repository. The manager automatically generates and registers an SSH deploy key to bypass pull request requirements for these updates. This allows tools like `dcrouter` to discover and route SSH connections to the correct container.
 
 ## Version Tracking
 The manager now prints the git SHA of the build on startup, allowing you to easily identify which version of the code is running. This information is automatically extracted from the build metadata.

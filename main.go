@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -104,35 +103,112 @@ func saveAndPushMappings(mappings PortMapping) error {
 		return err
 	}
 
-	// Also push to GitHub
-	log.Printf("Pushing updated mappings to GitHub...")
-	// 1. Get current SHA if file exists
-	cmd := exec.Command("gh", "api", "repos/brotherlogic/devcontainer-manager/contents/mappings.json")
-	output, _ := cmd.CombinedOutput()
-	var contentInfo struct {
-		Sha string `json:"sha"`
-	}
-	json.Unmarshal(output, &contentInfo)
-
-	// 2. Encode content to base64
-	encoded := base64.StdEncoding.EncodeToString(bytes)
-
-	// 3. Update or create file
-	args := []string{"api", "-X", "PUT", "repos/brotherlogic/devcontainer-manager/contents/mappings.json",
-		"-f", "message=Update port mappings [cli-skip]",
-		"-f", fmt.Sprintf("content=%s", encoded),
-	}
-	if contentInfo.Sha != "" {
-		args = append(args, "-f", fmt.Sprintf("sha=%s", contentInfo.Sha))
-	}
-
-	cmd = exec.Command("gh", args...)
-	out, err := cmd.CombinedOutput()
+	// Ensure we have a deploy key and a repo to push from
+	keyPath, err := ensureDeployKey()
 	if err != nil {
+		return fmt.Errorf("failed to ensure deploy key: %w", err)
+	}
+
+	repoPath, err := setupPushRepo()
+	if err != nil {
+		return fmt.Errorf("failed to setup push repo: %w", err)
+	}
+
+	// Copy mappings.json to the repo
+	repoMappingPath := filepath.Join(repoPath, "mappings.json")
+	if err := os.WriteFile(repoMappingPath, bytes, 0644); err != nil {
+		return fmt.Errorf("failed to copy mappings to repo: %w", err)
+	}
+
+	// Commit and push
+	log.Printf("Pushing updated mappings to GitHub using deploy key...")
+	
+	// Add and commit
+	commands := [][]string{
+		{"git", "add", "mappings.json"},
+		{"git", "commit", "-m", "Update port mappings [cli-skip]"},
+	}
+
+	for _, args := range commands {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = repoPath
+		if out, err := cmd.CombinedOutput(); err != nil {
+			// Ignore if there's nothing to commit
+			if !strings.Contains(string(out), "nothing to commit") {
+				return fmt.Errorf("git command %v failed: %w (output: %s)", args, err, string(out))
+			}
+		}
+	}
+
+	// Push
+	sshCmd := fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=no", keyPath)
+	pushCmd := exec.Command("git", "push", "origin", "main")
+	pushCmd.Dir = repoPath
+	pushCmd.Env = append(os.Environ(), fmt.Sprintf("GIT_SSH_COMMAND=%s", sshCmd))
+	
+	if out, err := pushCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to push mappings to GitHub: %w (output: %s)", err, string(out))
 	}
 
 	return nil
+}
+
+func ensureDeployKey() (string, error) {
+	configDir := getConfigDir()
+	keyPath := filepath.Join(configDir, "deploy_key")
+	pubPath := keyPath + ".pub"
+
+	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
+		log.Printf("Generating new deploy key...")
+		cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-C", "devcontainer-manager-deploy-key", "-N", "", "-f", keyPath)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("failed to generate ssh key: %w (output: %s)", err, string(out))
+		}
+
+		log.Printf("Registering deploy key with GitHub...")
+		regCmd := exec.Command("gh", "repo", "deploy-key", "add", pubPath, "-w", "-t", "devcontainer-manager-deploy-key")
+		if out, err := regCmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("failed to register deploy key: %w (output: %s)", err, string(out))
+		}
+	}
+
+	return keyPath, nil
+}
+
+func setupPushRepo() (string, error) {
+	configDir := getConfigDir()
+	repoPath := filepath.Join(configDir, "push-repo")
+
+	if _, err := os.Stat(filepath.Join(repoPath, ".git")); os.IsNotExist(err) {
+		log.Printf("Setting up push repository...")
+		os.MkdirAll(repoPath, 0755)
+
+		// Initialize and add remote
+		cmds := [][]string{
+			{"git", "init"},
+			{"git", "remote", "add", "origin", "git@github.com:brotherlogic/devcontainer-manager.git"},
+			{"git", "config", "user.email", "devcontainer-manager@brotherlogic-systems.com"},
+			{"git", "config", "user.name", "Devcontainer Manager"},
+			{"git", "fetch", "origin", "main"},
+			{"git", "checkout", "main"},
+		}
+
+		keyPath := filepath.Join(configDir, "deploy_key")
+		sshCmd := fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=no", keyPath)
+
+		for _, args := range cmds {
+			cmd := exec.Command(args[0], args[1:]...)
+			cmd.Dir = repoPath
+			if args[0] == "git" && (args[1] == "fetch" || args[1] == "push") {
+				cmd.Env = append(os.Environ(), fmt.Sprintf("GIT_SSH_COMMAND=%s", sshCmd))
+			}
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return "", fmt.Errorf("git command %v failed: %w (output: %s)", args, err, string(out))
+			}
+		}
+	}
+
+	return repoPath, nil
 }
 
 func allocatePort(projectName string, mappings *PortMapping) int {
