@@ -17,6 +17,7 @@ import (
 const (
 	DevpodLabelPrefix = "sh.loft.devpod.workspace.id="
 	VscLabelPrefix    = "dev.containers.id="
+	DockerRunArgs     = "DOCKER_RUN_ARGS"
 )
 
 var (
@@ -542,7 +543,7 @@ func recreateDevcontainer(repo string, currentWorkspaces map[string]Workspace, p
 	}
 
 	log.Printf("Creating new devcontainer for %s with id %s on port %d...", repo, projectName, port)
-	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("git@github.com:%s.git", repo), "--id", projectName, "--reset", "--ide", ideChoice, "--docker-run-args", fmt.Sprintf("-p %d:22", port))
+	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("git@github.com:%s.git", repo), "--id", projectName, "--reset", "--ide", ideChoice, "--provider-option", fmt.Sprintf("%s=-p %d:22", DockerRunArgs, port))
 	log.Printf("Running command: %s", strings.Join(upCmd.Args, " "))
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
@@ -565,7 +566,7 @@ func bringUpDevcontainer(repo string, currentWorkspaces map[string]Workspace, po
 	projectName := filepath.Base(repo)
 
 	log.Printf("Bringing up devcontainer for %s with id %s on port %d...", repo, projectName, port)
-	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("git@github.com:%s.git", repo), "--id", projectName, "--ide", ideChoice, "--docker-run-args", fmt.Sprintf("-p %d:22", port))
+	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("git@github.com:%s.git", repo), "--id", projectName, "--ide", ideChoice, "--provider-option", fmt.Sprintf("%s=-p %d:22", DockerRunArgs, port))
 	log.Printf("Running command: %s", strings.Join(upCmd.Args, " "))
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
