@@ -299,6 +299,7 @@ func checkRepos(trackedSHAs map[string]string, mappings PortMapping) {
 		return
 	}
 
+	// Sort repositories to prioritize checking those that were recently updated on GitHub
 	sortReposByLastUpdated(repos)
 
 	currentRepos := make(map[string]bool)
@@ -759,7 +760,7 @@ func sortReposByLastUpdated(repos []string) {
 	log.Printf("Sorting repositories by most recently touched...")
 	type RepoUpdate struct {
 		Name     string
-		PushedAt string
+		PushedAt time.Time
 	}
 
 	updates := make([]RepoUpdate, len(repos))
@@ -774,10 +775,15 @@ func sortReposByLastUpdated(repos []string) {
 			cmd := exec.Command("gh", "api", fmt.Sprintf("repos/%s", r), "--jq", ".pushed_at")
 			out, err := cmd.Output()
 			if err == nil {
-				updates[index].PushedAt = strings.TrimSpace(string(out))
+				pushedAtStr := strings.TrimSpace(string(out))
+				t, err := time.Parse(time.RFC3339, pushedAtStr)
+				if err == nil {
+					updates[index].PushedAt = t
+				} else {
+					log.Printf("Warning: failed to parse pushed_at for %s: %v", r, err)
+				}
 			} else {
-				// Keep it empty on error so it falls to the bottom
-				updates[index].PushedAt = ""
+				log.Printf("Warning: failed to fetch pushed_at for %s: %v", r, err)
 			}
 		}(i, repo)
 	}
@@ -785,7 +791,7 @@ func sortReposByLastUpdated(repos []string) {
 	wg.Wait()
 
 	sort.SliceStable(updates, func(i, j int) bool {
-		return updates[i].PushedAt > updates[j].PushedAt
+		return updates[i].PushedAt.After(updates[j].PushedAt)
 	})
 
 	for i, update := range updates {
