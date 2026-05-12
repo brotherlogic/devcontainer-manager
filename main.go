@@ -19,6 +19,7 @@ import (
 const (
 	DevpodLabelPrefix = "sh.loft.devpod.workspace.id="
 	VscLabelPrefix    = "dev.containers.id="
+	DockerRunArgs     = "DOCKER_RUN_ARGS"
 )
 
 var (
@@ -33,6 +34,14 @@ func init() {
 
 type Commit struct {
 	Sha string `json:"sha"`
+}
+
+type PortMapping struct {
+	Containers map[string]ContainerMapping `json:"containers"`
+}
+
+type ContainerMapping struct {
+	HostPort int `json:"hostPort"`
 }
 
 type Workspace struct {
@@ -60,15 +69,166 @@ func main() {
 	// Track the last seen commit for each repo
 	trackedSHAs := loadTrackedSHAs()
 
+	// Load port mappings
+	mappings := loadPortMappings()
+
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
 	// Run initial check immediately
-	checkRepos(trackedSHAs)
+	checkRepos(trackedSHAs, mappings)
 
 	for range ticker.C {
-		checkRepos(trackedSHAs)
+		checkRepos(trackedSHAs, mappings)
 	}
+}
+
+func loadPortMappings() PortMapping {
+	mappingPath := filepath.Join(getConfigDir(), "mappings.json")
+	var mappings PortMapping
+	mappings.Containers = make(map[string]ContainerMapping)
+
+	bytes, err := os.ReadFile(mappingPath)
+	if err == nil {
+		json.Unmarshal(bytes, &mappings)
+	}
+	return mappings
+}
+
+func saveAndPushMappings(mappings PortMapping) error {
+	mappingPath := filepath.Join(getConfigDir(), "mappings.json")
+	bytes, err := json.MarshalIndent(mappings, "", "  ")
+	if err != nil {
+		return err
+	}
+	err = os.WriteFile(mappingPath, bytes, 0644)
+	if err != nil {
+		return err
+	}
+
+	// Ensure we have a deploy key and a repo to push from
+	keyPath, err := ensureDeployKey()
+	if err != nil {
+		return fmt.Errorf("failed to ensure deploy key: %w", err)
+	}
+
+	repoPath, err := setupPushRepo()
+	if err != nil {
+		return fmt.Errorf("failed to setup push repo: %w", err)
+	}
+
+	// Copy mappings.json to the repo
+	repoMappingPath := filepath.Join(repoPath, "mappings.json")
+	if err := os.WriteFile(repoMappingPath, bytes, 0644); err != nil {
+		return fmt.Errorf("failed to copy mappings to repo: %w", err)
+	}
+
+	// Commit and push
+	log.Printf("Pushing updated mappings to GitHub using deploy key...")
+	
+	// Add and commit
+	commands := [][]string{
+		{"git", "add", "mappings.json"},
+		{"git", "commit", "-m", "Update port mappings [cli-skip]"},
+	}
+
+	for _, args := range commands {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = repoPath
+		if out, err := cmd.CombinedOutput(); err != nil {
+			// Ignore if there's nothing to commit
+			if !strings.Contains(string(out), "nothing to commit") {
+				return fmt.Errorf("git command %v failed: %w (output: %s)", args, err, string(out))
+			}
+		}
+	}
+
+	// Push
+	sshCmd := fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=no", keyPath)
+	pushCmd := exec.Command("git", "push", "origin", "main")
+	pushCmd.Dir = repoPath
+	pushCmd.Env = append(os.Environ(), fmt.Sprintf("GIT_SSH_COMMAND=%s", sshCmd))
+	
+	if out, err := pushCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to push mappings to GitHub: %w (output: %s)", err, string(out))
+	}
+
+	return nil
+}
+
+func ensureDeployKey() (string, error) {
+	configDir := getConfigDir()
+	keyPath := filepath.Join(configDir, "deploy_key")
+	pubPath := keyPath + ".pub"
+
+	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
+		log.Printf("Generating new deploy key...")
+		cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-C", "devcontainer-manager-deploy-key", "-N", "", "-f", keyPath)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("failed to generate ssh key: %w (output: %s)", err, string(out))
+		}
+
+		log.Printf("Registering deploy key with GitHub...")
+		regCmd := exec.Command("gh", "repo", "deploy-key", "add", pubPath, "-w", "-t", "devcontainer-manager-deploy-key")
+		if out, err := regCmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("failed to register deploy key: %w (output: %s)", err, string(out))
+		}
+	}
+
+	return keyPath, nil
+}
+
+func setupPushRepo() (string, error) {
+	configDir := getConfigDir()
+	repoPath := filepath.Join(configDir, "push-repo")
+
+	if _, err := os.Stat(filepath.Join(repoPath, ".git")); os.IsNotExist(err) {
+		log.Printf("Setting up push repository...")
+		os.MkdirAll(repoPath, 0755)
+
+		// Initialize and add remote
+		cmds := [][]string{
+			{"git", "init"},
+			{"git", "remote", "add", "origin", "git@github.com:brotherlogic/devcontainer-manager.git"},
+			{"git", "config", "user.email", "devcontainer-manager@brotherlogic-systems.com"},
+			{"git", "config", "user.name", "Devcontainer Manager"},
+			{"git", "fetch", "origin", "main"},
+			{"git", "checkout", "main"},
+		}
+
+		keyPath := filepath.Join(configDir, "deploy_key")
+		sshCmd := fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=no", keyPath)
+
+		for _, args := range cmds {
+			cmd := exec.Command(args[0], args[1:]...)
+			cmd.Dir = repoPath
+			if args[0] == "git" && (args[1] == "fetch" || args[1] == "push") {
+				cmd.Env = append(os.Environ(), fmt.Sprintf("GIT_SSH_COMMAND=%s", sshCmd))
+			}
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return "", fmt.Errorf("git command %v failed: %w (output: %s)", args, err, string(out))
+			}
+		}
+	}
+
+	return repoPath, nil
+}
+
+func allocatePort(projectName string, mappings *PortMapping) int {
+	if m, ok := mappings.Containers[projectName]; ok {
+		return m.HostPort
+	}
+
+	maxPort := 2221
+	for _, m := range mappings.Containers {
+		if m.HostPort > maxPort {
+			maxPort = m.HostPort
+		}
+	}
+
+	newPort := maxPort + 1
+	mappings.Containers[projectName] = ContainerMapping{HostPort: newPort}
+	return newPort
 }
 
 func getVersion() string {
@@ -118,7 +278,7 @@ func checkDevPodProvider() error {
 	return nil
 }
 
-func checkRepos(trackedSHAs map[string]string) {
+func checkRepos(trackedSHAs map[string]string, mappings PortMapping) {
 	configPath := filepath.Join(getConfigDir(), "container.list")
 
 	log.Printf("Syncing container list from remote template...")
@@ -153,6 +313,7 @@ func checkRepos(trackedSHAs map[string]string) {
 		templateRepoIDs[filepath.Base(repo)] = repo
 	}
 
+	dirtyMappings := false
 	for id := range currentWorkspaces {
 		if _, exists := templateRepoIDs[id]; !exists {
 			log.Printf("Workspace %s is no longer in the template. Deleting...", id)
@@ -166,12 +327,26 @@ func checkRepos(trackedSHAs map[string]string) {
 					}
 				}
 				saveTrackedSHAs(trackedSHAs)
+
+				// Remove from mappings
+				if _, ok := mappings.Containers[id]; ok {
+					delete(mappings.Containers, id)
+					dirtyMappings = true
+				}
 			}
 		}
 	}
 
 	for _, repo := range repos {
-		checkRepo(repo, trackedSHAs, currentWorkspaces)
+		if checkRepo(repo, trackedSHAs, currentWorkspaces, &mappings) {
+			dirtyMappings = true
+		}
+	}
+
+	if dirtyMappings {
+		if err := saveAndPushMappings(mappings); err != nil {
+			log.Printf("Warning: failed to push mappings: %v", err)
+		}
 	}
 }
 
@@ -271,56 +446,62 @@ func saveTrackedSHAs(shas map[string]string) error {
 	return os.WriteFile(trackerPath, bytes, 0644)
 }
 
-func checkRepo(repo string, trackedSHAs map[string]string, currentWorkspaces map[string]Workspace) {
+func checkRepo(repo string, trackedSHAs map[string]string, currentWorkspaces map[string]Workspace, mappings *PortMapping) bool {
 	log.Printf("Checking %s for devcontainer updates...", repo)
 
 	latestSHA, err := getLatestDevcontainerCommit(repo)
 	if err != nil {
 		notifyError("Error checking commits for %s: %v", repo, err)
-		return
+		return false
 	}
 
 	if latestSHA == "-" {
 		log.Printf("No devcontainer configuration found or no commits for %s", repo)
-		return
+		return false
 	}
+
+	projectName := filepath.Base(repo)
+	initialMappingsCount := len(mappings.Containers)
+	port := allocatePort(projectName, mappings)
+	dirty := len(mappings.Containers) > initialMappingsCount
 
 	lastSeen, exists := trackedSHAs[repo]
 	if !exists {
 		log.Printf("Initial tracking (or cache invalidated) for %s at commit state %s. Recreating container...", repo, latestSHA)
-		if err := recreateDevcontainer(repo, currentWorkspaces); err != nil {
+		if err := recreateDevcontainer(repo, currentWorkspaces, port); err != nil {
 			notifyError("Failed to recreate devcontainer for %s: %v", repo, err)
-			return
+			return dirty
 		}
 		trackedSHAs[repo] = latestSHA
 		saveTrackedSHAs(trackedSHAs)
-		return
+		return dirty
 	}
 
 	if lastSeen != latestSHA {
 		log.Printf("Detected devcontainer change in %s! Updating from %s to %s", repo, lastSeen, latestSHA)
 
-		err := recreateDevcontainer(repo, currentWorkspaces)
+		err := recreateDevcontainer(repo, currentWorkspaces, port)
 		if err != nil {
 			notifyError("Failed to recreate devcontainer for %s: %v", repo, err)
-			return // Don't update tracked SHA if recreation failed so it retries next time
+			return dirty // Don't update tracked SHA if recreation failed so it retries next time
 		}
 
 		trackedSHAs[repo] = latestSHA
 		saveTrackedSHAs(trackedSHAs)
 		log.Printf("Successfully updated devcontainer for %s", repo)
 	} else {
-		projectName := filepath.Base(repo)
 		if !isContainerRunning(projectName, currentWorkspaces) {
 			log.Printf("No new updates for %s, but container is not running. Bringing it up...", repo)
-			if err := bringUpDevcontainer(repo, currentWorkspaces); err != nil {
+			if err := bringUpDevcontainer(repo, currentWorkspaces, port); err != nil {
 				notifyError("Failed to bring up devcontainer for %s: %v", repo, err)
-				return
+				return dirty
 			}
 		} else {
 			log.Printf("No new updates for %s, and container is running", repo)
 		}
 	}
+
+	return dirty
 }
 
 func getLatestDevcontainerCommit(repo string) (string, error) {
@@ -358,15 +539,15 @@ func getLatestCommitForPath(repo, path string) (string, error) {
 	return "", nil
 }
 
-func recreateDevcontainer(repo string, currentWorkspaces map[string]Workspace) error {
+func recreateDevcontainer(repo string, currentWorkspaces map[string]Workspace, port int) error {
 	projectName := filepath.Base(repo)
 
 	if err := deleteDevcontainer(repo); err != nil {
 		log.Printf("Warning: delete error ignored during recreation for %s: %v", repo, err)
 	}
 
-	log.Printf("Creating new devcontainer for %s with id %s...", repo, projectName)
-	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("git@github.com:%s.git", repo), "--id", projectName, "--reset", "--ide", ideChoice)
+	log.Printf("Creating new devcontainer for %s with id %s on port %d...", repo, projectName, port)
+	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("git@github.com:%s.git", repo), "--id", projectName, "--reset", "--ide", ideChoice, "--provider-option", fmt.Sprintf("%s=-p %d:22", DockerRunArgs, port))
 	log.Printf("Running command: %s", strings.Join(upCmd.Args, " "))
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
@@ -385,11 +566,11 @@ func recreateDevcontainer(repo string, currentWorkspaces map[string]Workspace) e
 	return nil
 }
 
-func bringUpDevcontainer(repo string, currentWorkspaces map[string]Workspace) error {
+func bringUpDevcontainer(repo string, currentWorkspaces map[string]Workspace, port int) error {
 	projectName := filepath.Base(repo)
 
-	log.Printf("Bringing up devcontainer for %s with id %s...", repo, projectName)
-	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("git@github.com:%s.git", repo), "--id", projectName, "--ide", ideChoice)
+	log.Printf("Bringing up devcontainer for %s with id %s on port %d...", repo, projectName, port)
+	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("git@github.com:%s.git", repo), "--id", projectName, "--ide", ideChoice, "--provider-option", fmt.Sprintf("%s=-p %d:22", DockerRunArgs, port))
 	log.Printf("Running command: %s", strings.Join(upCmd.Args, " "))
 	upOut, err := upCmd.CombinedOutput()
 	log.Printf("%s up output: %s", devpodExe, string(upOut))
