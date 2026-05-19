@@ -10,7 +10,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -296,6 +298,9 @@ func checkRepos(trackedSHAs map[string]string, mappings PortMapping) {
 		log.Printf("Error: failed to get existing devpod workspaces: %v. Skipping sync interval for safety.", err)
 		return
 	}
+
+	// Sort repositories to prioritize checking those that were recently updated on GitHub
+	sortReposByLastUpdated(repos)
 
 	currentRepos := make(map[string]bool)
 	for _, repo := range repos {
@@ -749,4 +754,47 @@ func deleteDevcontainerByID(id string) error {
 
 	log.Printf("Successfully deleted devcontainer %s", id)
 	return nil
+}
+
+func sortReposByLastUpdated(repos []string) {
+	log.Printf("Sorting repositories by most recently touched...")
+	type RepoUpdate struct {
+		Name     string
+		PushedAt time.Time
+	}
+
+	updates := make([]RepoUpdate, len(repos))
+	var wg sync.WaitGroup
+
+	for i, repo := range repos {
+		wg.Add(1)
+		go func(index int, r string) {
+			defer wg.Done()
+			updates[index].Name = r
+
+			cmd := exec.Command("gh", "api", fmt.Sprintf("repos/%s", r), "--jq", ".pushed_at")
+			out, err := cmd.Output()
+			if err == nil {
+				pushedAtStr := strings.TrimSpace(string(out))
+				t, err := time.Parse(time.RFC3339, pushedAtStr)
+				if err == nil {
+					updates[index].PushedAt = t
+				} else {
+					log.Printf("Warning: failed to parse pushed_at for %s: %v", r, err)
+				}
+			} else {
+				log.Printf("Warning: failed to fetch pushed_at for %s: %v", r, err)
+			}
+		}(i, repo)
+	}
+
+	wg.Wait()
+
+	sort.SliceStable(updates, func(i, j int) bool {
+		return updates[i].PushedAt.After(updates[j].PushedAt)
+	})
+
+	for i, update := range updates {
+		repos[i] = update.Name
+	}
 }
