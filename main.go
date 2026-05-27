@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"path"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -91,6 +95,12 @@ func run(ctx context.Context, containerList string) error {
 		}
 	}
 
+	trackedSHAs := loadTrackedSHAs()
+	client, clientErr := getGHClient()
+	if clientErr != nil {
+		log.Printf("Warning: failed to get GitHub client: %v. Change detection will be bypassed.", clientErr)
+	}
+
 	for _, repo := range repos {
 		id := strings.ReplaceAll(repo, "/", "-")
 		if !running[id] {
@@ -99,6 +109,43 @@ func run(ctx context.Context, containerList string) error {
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				log.Printf("Failed to start devcontainer for %s: %v (output: %s)", repo, err, string(out))
+			} else {
+				if client != nil {
+					compositeSHA, err := getRepoCompositeSHA(ctx, client, repo)
+					if err == nil {
+						trackedSHAs[repo] = compositeSHA
+						saveTrackedSHAs(trackedSHAs)
+					} else {
+						log.Printf("Warning: failed to get composite SHA for %s: %v", repo, err)
+					}
+				}
+			}
+		} else {
+			if client != nil {
+				compositeSHA, err := getRepoCompositeSHA(ctx, client, repo)
+				if err != nil {
+					log.Printf("Warning: failed to get composite SHA for %s: %v", repo, err)
+					continue
+				}
+
+				lastSeen, exists := trackedSHAs[repo]
+				if !exists {
+					log.Printf("Initial tracking established for %s at %s", repo, compositeSHA)
+					trackedSHAs[repo] = compositeSHA
+					saveTrackedSHAs(trackedSHAs)
+				} else if lastSeen != compositeSHA {
+					log.Printf("Detected devcontainer configuration/script change in %s! Recreating container...", repo)
+					log.Printf("Old tracking: %s", lastSeen)
+					log.Printf("New tracking: %s", compositeSHA)
+
+					err := recreateContainer(repo, id)
+					if err != nil {
+						log.Printf("Failed to recreate devcontainer for %s: %v", repo, err)
+					} else {
+						trackedSHAs[repo] = compositeSHA
+						saveTrackedSHAs(trackedSHAs)
+					}
+				}
 			}
 		}
 	}
@@ -175,4 +222,337 @@ func sortReposByLastUpdated(repos []string) {
 	for i, update := range updates {
 		repos[i] = update.Name
 	}
+}
+
+func getConfigDir() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("failed to get home directory: %v", err)
+	}
+	configDir := filepath.Join(homeDir, ".config", "devcontainer-manager")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		log.Fatalf("failed to create config directory: %v", err)
+	}
+	return configDir
+}
+
+func loadTrackedSHAs() map[string]string {
+	trackerPath := filepath.Join(getConfigDir(), "tracked_shas.json")
+	shas := make(map[string]string)
+
+	bytes, err := os.ReadFile(trackerPath)
+	if err == nil {
+		json.Unmarshal(bytes, &shas)
+	}
+	return shas
+}
+
+func saveTrackedSHAs(shas map[string]string) error {
+	trackerPath := filepath.Join(getConfigDir(), "tracked_shas.json")
+	bytes, err := json.MarshalIndent(shas, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(trackerPath, bytes, 0644)
+}
+
+func stripComments(jsonStr string) string {
+	var result strings.Builder
+	inString := false
+	inLineComment := false
+	inBlockComment := false
+
+	runes := []rune(jsonStr)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if inLineComment {
+			if r == '\n' || r == '\r' {
+				inLineComment = false
+				result.WriteRune(r)
+			}
+			continue
+		}
+		if inBlockComment {
+			if r == '*' && i+1 < len(runes) && runes[i+1] == '/' {
+				inBlockComment = false
+				i++
+			}
+			continue
+		}
+		if inString {
+			if r == '"' {
+				escaped := false
+				for j := i - 1; j >= 0; j-- {
+					if runes[j] == '\\' {
+						escaped = !escaped
+					} else {
+						break
+					}
+				}
+				if !escaped {
+					inString = false
+				}
+			}
+			result.WriteRune(r)
+			continue
+		}
+
+		if r == '"' {
+			inString = true
+			result.WriteRune(r)
+			continue
+		}
+		if r == '/' && i+1 < len(runes) && runes[i+1] == '/' {
+			inLineComment = true
+			i++
+			continue
+		}
+		if r == '/' && i+1 < len(runes) && runes[i+1] == '*' {
+			inBlockComment = true
+			i++
+			continue
+		}
+		result.WriteRune(r)
+	}
+	return result.String()
+}
+
+func cleanJSON(jsonStr string) string {
+	cleaned := stripComments(jsonStr)
+	reTrailingComma := regexp.MustCompile(`,(\s*[}\]])`)
+	cleaned = reTrailingComma.ReplaceAllString(cleaned, "$1")
+	return cleaned
+}
+
+func extractTokens(cmd string) []string {
+	r := strings.NewReplacer("&&", " ", "||", " ", ";", " ", "|", " ", "\"", " ", "'", " ")
+	cmdCleaned := r.Replace(cmd)
+	return strings.Fields(cmdCleaned)
+}
+
+func isScriptCandidate(token string) bool {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return false
+	}
+	if strings.HasPrefix(token, "-") {
+		return false
+	}
+	builtins := map[string]bool{
+		"bash": true, "sh": true, "zsh": true, "sudo": true, "apt": true, "go": true,
+		"python": true, "pip": true, "npm": true, "yarn": true, "node": true, "echo": true,
+		"cat": true, "mkdir": true, "cd": true, "rm": true, "mv": true, "cp": true,
+		"chmod": true, "chown": true, "env": true, "export": true, "git": true, "make": true,
+	}
+	if builtins[token] {
+		return false
+	}
+	extensions := []string{".sh", ".bash", ".zsh", ".py", ".pl", ".rb", ".js", ".ts"}
+	for _, ext := range extensions {
+		if strings.HasSuffix(token, ext) {
+			return true
+		}
+	}
+	if (strings.HasPrefix(token, "./") || strings.Contains(token, "/")) && !strings.Contains(token, "://") {
+		return true
+	}
+	return false
+}
+
+func normalizePath(p string) string {
+	p = strings.TrimSpace(p)
+	p = strings.TrimPrefix(p, "./")
+	p = path.Clean(p)
+	return p
+}
+
+func extractScriptsFromJSON(jsonContent string) []string {
+	cleaned := cleanJSON(jsonContent)
+	var data map[string]interface{}
+	if err := json.Unmarshal([]byte(cleaned), &data); err != nil {
+		log.Printf("Warning: failed to parse devcontainer JSON: %v. Falling back to regex.", err)
+		return extractScriptsViaRegex(jsonContent)
+	}
+
+	scriptKeys := []string{
+		"initializeCommand",
+		"onCreateCommand",
+		"updateContentCommand",
+		"postCreateCommand",
+		"postStartCommand",
+		"postAttachCommand",
+	}
+
+	var candidates []string
+	for _, key := range scriptKeys {
+		val, ok := data[key]
+		if !ok {
+			continue
+		}
+
+		switch v := val.(type) {
+		case string:
+			for _, token := range extractTokens(v) {
+				if isScriptCandidate(token) {
+					candidates = append(candidates, normalizePath(token))
+				}
+			}
+		case []interface{}:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					for _, token := range extractTokens(s) {
+						if isScriptCandidate(token) {
+							candidates = append(candidates, normalizePath(token))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	unique := make(map[string]bool)
+	var result []string
+	for _, c := range candidates {
+		if !unique[c] {
+			unique[c] = true
+			result = append(result, c)
+		}
+	}
+	return result
+}
+
+func extractScriptsViaRegex(content string) []string {
+	var result []string
+	scriptKeys := []string{
+		"initializeCommand",
+		"onCreateCommand",
+		"updateContentCommand",
+		"postCreateCommand",
+		"postStartCommand",
+		"postAttachCommand",
+	}
+
+	for _, key := range scriptKeys {
+		re := regexp.MustCompile(fmt.Sprintf(`"%s"\s*:\s*"([^"]+)"`, key))
+		matches := re.FindAllStringSubmatch(content, -1)
+		for _, match := range matches {
+			if len(match) > 1 {
+				for _, token := range extractTokens(match[1]) {
+					if isScriptCandidate(token) {
+						result = append(result, normalizePath(token))
+					}
+				}
+			}
+		}
+	}
+
+	unique := make(map[string]bool)
+	var finalResult []string
+	for _, r := range result {
+		if !unique[r] {
+			unique[r] = true
+			finalResult = append(finalResult, r)
+		}
+	}
+	return finalResult
+}
+
+func fetchFileContent(ctx context.Context, client *github.Client, owner, repo, path string) (string, string, error) {
+	fileContent, _, _, err := client.Repositories.GetContents(ctx, owner, repo, path, nil)
+	if err != nil {
+		return "", "", err
+	}
+	content, err := fileContent.GetContent()
+	if err != nil {
+		return "", "", err
+	}
+	return content, fileContent.GetSHA(), nil
+}
+
+func getFileSHA(ctx context.Context, client *github.Client, owner, repoName, path string) (string, bool) {
+	fileContent, _, resp, err := client.Repositories.GetContents(ctx, owner, repoName, path, nil)
+	if err != nil {
+		if resp != nil && resp.StatusCode == 404 {
+			return "", false
+		}
+		log.Printf("Warning: failed to get contents for %s/%s at %s: %v", owner, repoName, path, err)
+		return "", false
+	}
+	if fileContent == nil {
+		return "", false
+	}
+	return fileContent.GetSHA(), true
+}
+
+func getRepoCompositeSHA(ctx context.Context, client *github.Client, repo string) (string, error) {
+	parts := strings.Split(repo, "/")
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid repository format: %s", repo)
+	}
+	owner, repoName := parts[0], parts[1]
+
+	var devcontainerJSON string
+	var devcontainerSHA string
+	var found bool
+
+	content, sha, err := fetchFileContent(ctx, client, owner, repoName, ".devcontainer/devcontainer.json")
+	if err == nil {
+		devcontainerJSON = content
+		devcontainerSHA = sha
+		found = true
+	} else {
+		content, sha, err = fetchFileContent(ctx, client, owner, repoName, "devcontainer.json")
+		if err == nil {
+			devcontainerJSON = content
+			devcontainerSHA = sha
+			found = true
+		}
+	}
+
+	if !found {
+		return "no-devcontainer", nil
+	}
+
+	shaMap := map[string]string{
+		"devcontainer.json": devcontainerSHA,
+	}
+
+	scripts := extractScriptsFromJSON(devcontainerJSON)
+	for _, scriptPath := range scripts {
+		if sha, ok := getFileSHA(ctx, client, owner, repoName, scriptPath); ok {
+			shaMap[scriptPath] = sha
+		} else {
+			fallbackPath := path.Join(".devcontainer", scriptPath)
+			if sha, ok := getFileSHA(ctx, client, owner, repoName, fallbackPath); ok {
+				shaMap[fallbackPath] = sha
+			}
+		}
+	}
+
+	var keys []string
+	for k := range shaMap {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var partsSHA []string
+	for _, k := range keys {
+		partsSHA = append(partsSHA, fmt.Sprintf("%s:%s", k, shaMap[k]))
+	}
+
+	return strings.Join(partsSHA, "|"), nil
+}
+
+func recreateContainer(repo string, id string) error {
+	log.Printf("Recreating devcontainer for %s...", repo)
+	if err := deleteContainer(id); err != nil {
+		log.Printf("Warning: failed to delete container %s before recreating: %v", id, err)
+	}
+	cmd := exec.Command("devpod", "up", fmt.Sprintf("https://github.com/%s", repo), "--id", id, "--detach")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("devpod up failed: %w (output: %s)", err, string(out))
+	}
+	log.Printf("Successfully recreated devcontainer for %s", repo)
+	return nil
 }
