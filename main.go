@@ -1,565 +1,127 @@
 package main
 
 import (
-	"bufio"
-	"encoding/json"
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"runtime/debug"
+	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/google/go-github/v50/github"
+	"golang.org/x/oauth2"
 )
 
-const (
-	DevpodLabelPrefix = "sh.loft.devpod.workspace.id="
-	VscLabelPrefix    = "dev.containers.id="
-)
+func getGHClient() (*github.Client, error) {
+	token := os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		// Try to get token from gh cli
+		cmd := exec.Command("gh", "auth", "token")
+		out, err := cmd.Output()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get token from gh cli: %w", err)
+		}
+		token = strings.TrimSpace(string(out))
+	}
 
-var (
-	devpodExe string
-	ideChoice string
-)
+	if token == "" {
+		return nil, fmt.Errorf("GITHUB_TOKEN is not set")
+	}
 
-func init() {
-	flag.StringVar(&devpodExe, "devpod-exe", "devpod-cli", "The executable name for devpod")
-	flag.StringVar(&ideChoice, "ide", "none", "The IDE to use for devcontainers")
-}
+	ts := oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: token},
+	)
+	tc := oauth2.NewClient(context.Background(), ts)
 
-type Commit struct {
-	Sha string `json:"sha"`
-}
-
-type Workspace struct {
-	ID     string `json:"id"`  // Human-readable ID (project-name)
-	UID    string `json:"uid"` // Devpod internal unique ID (matches dev.containers.id label)
-	Source Source `json:"source"`
-}
-
-type Source struct {
-	GitRepository string `json:"gitRepository"`
+	return github.NewClient(tc), nil
 }
 
 func main() {
+	var runOnce = flag.Bool("once", false, "Run once and exit")
+	var containerList = flag.String("container_list", "container.list.template", "The list of containers to run")
 	flag.Parse()
-	log.Printf("Starting devcontainer manager (version: %s)...", getVersion())
 
-	if err := checkGHAuth(); err != nil {
-		notifyFatal("GitHub CLI authentication failed: %v", err)
-	}
-
-	if err := checkDevPodProvider(); err != nil {
-		notifyFatal("DevPod provider configuration failed: %v", err)
-	}
-
-	// Track the last seen commit for each repo
-	trackedSHAs := loadTrackedSHAs()
-
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-
-	// Run initial check immediately
-	checkRepos(trackedSHAs)
-
-	for range ticker.C {
-		checkRepos(trackedSHAs)
-	}
-}
-
-func getVersion() string {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return "dev"
-	}
-
-	for _, setting := range info.Settings {
-		if setting.Key == "vcs.revision" {
-			// Found the git SHA
-			if len(setting.Value) > 7 {
-				return setting.Value[:7]
-			}
-			return setting.Value
+	for {
+		err := run(context.Background(), *containerList)
+		if err != nil {
+			log.Printf("Error: %v", err)
 		}
-	}
 
-	return "dev"
-}
-
-func checkGHAuth() error {
-	cmd := exec.Command("gh", "auth", "status")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("GitHub CLI authentication failed: %w (details: %s)", err, strings.TrimSpace(string(output)))
-	}
-	return nil
-}
-
-func checkDevPodProvider() error {
-	cmd := exec.Command(devpodExe, "provider", "list", "--output", "json")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to list devpod providers: %w (output: %s)", err, strings.TrimSpace(string(output)))
-	}
-
-	var providers map[string]interface{}
-	if err := json.Unmarshal(output, &providers); err != nil {
-		return fmt.Errorf("failed to parse devpod providers: %w", err)
-	}
-
-	if len(providers) == 0 {
-		return fmt.Errorf("no DevPod provider found. Please add a provider (e.g., '%s provider add docker')", devpodExe)
-	}
-
-	return nil
-}
-
-func checkRepos(trackedSHAs map[string]string) {
-	configPath := filepath.Join(getConfigDir(), "container.list")
-
-	log.Printf("Syncing container list from remote template...")
-	if err := pullTemplateFromGitHub(configPath); err != nil {
-		log.Printf("Warning: failed to sync container.list from template: %v", err)
-		// We'll continue with the local container.list if it exists
-	}
-
-	repos, err := readContainerList()
-	if err != nil {
-		notifyError("Error reading container.list: %v", err)
-		return
-	}
-
-	currentWorkspaces, err := getExistingWorkspaces()
-	if err != nil {
-		log.Printf("Error: failed to get existing devpod workspaces: %v. Skipping sync interval for safety.", err)
-		return
-	}
-
-	currentRepos := make(map[string]bool)
-	for _, repo := range repos {
-		currentRepos[repo] = true
-	}
-
-	// Deleting workspaces that are not in the template anymore
-	// Pre-calculate mapping of IDs to repos in template for faster lookup
-	templateRepoIDs := make(map[string]string)
-	for _, repo := range repos {
-		templateRepoIDs[filepath.Base(repo)] = repo
-	}
-
-	for id := range currentWorkspaces {
-		if _, exists := templateRepoIDs[id]; !exists {
-			log.Printf("Workspace %s is no longer in the template. Deleting...", id)
-			if err := deleteDevcontainerByID(id); err != nil {
-				log.Printf("Failed to delete workspace %s: %v", id, err)
-			} else {
-				// Efficiently remove from trackedSHAs
-				for repo := range trackedSHAs {
-					if filepath.Base(repo) == id {
-						delete(trackedSHAs, repo)
-					}
-				}
-				saveTrackedSHAs(trackedSHAs)
-			}
+		if *runOnce {
+			break
 		}
-	}
 
-	for _, repo := range repos {
-		checkRepo(repo, trackedSHAs, currentWorkspaces)
+		time.Sleep(time.Minute * 5)
 	}
 }
 
-func readContainerList() ([]string, error) {
-	configPath := filepath.Join(getConfigDir(), "container.list")
-	file, err := os.Open(configPath)
+func run(ctx context.Context, containerList string) error {
+	data, err := os.ReadFile(containerList)
 	if err != nil {
-		if os.IsNotExist(err) {
-			log.Printf("%s not found, pulling template from GitHub...", configPath)
-			if pullErr := pullTemplateFromGitHub(configPath); pullErr != nil {
-				return nil, fmt.Errorf("failed to pull template: %w", pullErr)
-			}
-			file, err = os.Open(configPath)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			return nil, err
-		}
+		return fmt.Errorf("failed to read container list: %w", err)
 	}
-	defer file.Close()
 
+	lines := strings.Split(string(data), "\n")
 	var repos []string
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		// Skip empty lines and comments
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
 		if line != "" && !strings.HasPrefix(line, "#") {
 			repos = append(repos, line)
 		}
 	}
 
-	return repos, scanner.Err()
-}
+	sortReposByLastUpdated(repos)
 
-func pullTemplateFromGitHub(configPath string) error {
-	cmd := exec.Command("gh", "api", "repos/brotherlogic/devcontainer-manager/contents/container.list.template", "-H", "Accept: application/vnd.github.v3.raw")
-	output, err := cmd.CombinedOutput()
+	// Get running devcontainers
+	cmd := exec.Command("devpod", "list")
+	out, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("gh api error: %w (output: %s)", err, strings.TrimSpace(string(output)))
-	}
-	if len(output) == 0 {
-		return fmt.Errorf("empty response from GitHub template API")
-	}
-	return os.WriteFile(configPath, output, 0644)
-}
-
-func getExistingWorkspaces() (map[string]Workspace, error) {
-	cmd := exec.Command(devpodExe, "list", "--output", "json")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("failed to list devpod workspaces: %w (output: %s)", err, strings.TrimSpace(string(output)))
+		return fmt.Errorf("failed to list devcontainers: %w", err)
 	}
 
-	var workspaces []Workspace
-	if err := json.Unmarshal(output, &workspaces); err != nil {
-		return nil, fmt.Errorf("failed to parse devpod workspaces json: %w", err)
-	}
-
-	wsMap := make(map[string]Workspace)
-	for _, ws := range workspaces {
-		if _, exists := wsMap[ws.ID]; exists {
-			log.Printf("Warning: duplicate workspace ID '%s' found in devpod list. Overwriting for represented mapping.", ws.ID)
+	running := make(map[string]bool)
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 {
+			running[fields[0]] = true
 		}
-		wsMap[ws.ID] = ws
-	}
-	return wsMap, nil
-}
-
-func getConfigDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "."
-	}
-	configDir := filepath.Join(home, ".config", "devcontainer-manager")
-	os.MkdirAll(configDir, 0755)
-	return configDir
-}
-
-func loadTrackedSHAs() map[string]string {
-	trackerPath := filepath.Join(getConfigDir(), "tracked_shas.json")
-	shas := make(map[string]string)
-
-	bytes, err := os.ReadFile(trackerPath)
-	if err == nil {
-		json.Unmarshal(bytes, &shas)
-	}
-	return shas
-}
-
-func saveTrackedSHAs(shas map[string]string) error {
-	trackerPath := filepath.Join(getConfigDir(), "tracked_shas.json")
-	bytes, err := json.MarshalIndent(shas, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(trackerPath, bytes, 0644)
-}
-
-func checkRepo(repo string, trackedSHAs map[string]string, currentWorkspaces map[string]Workspace) {
-	log.Printf("Checking %s for devcontainer updates...", repo)
-
-	latestSHA, err := getLatestDevcontainerCommit(repo)
-	if err != nil {
-		notifyError("Error checking commits for %s: %v", repo, err)
-		return
 	}
 
-	if latestSHA == "-" {
-		log.Printf("No devcontainer configuration found or no commits for %s", repo)
-		return
-	}
-
-	lastSeen, exists := trackedSHAs[repo]
-	if !exists {
-		log.Printf("Initial tracking (or cache invalidated) for %s at commit state %s. Recreating container...", repo, latestSHA)
-		if err := recreateDevcontainer(repo, currentWorkspaces); err != nil {
-			notifyError("Failed to recreate devcontainer for %s: %v", repo, err)
-			return
-		}
-		trackedSHAs[repo] = latestSHA
-		saveTrackedSHAs(trackedSHAs)
-		return
-	}
-
-	if lastSeen != latestSHA {
-		log.Printf("Detected devcontainer change in %s! Updating from %s to %s", repo, lastSeen, latestSHA)
-
-		err := recreateDevcontainer(repo, currentWorkspaces)
-		if err != nil {
-			notifyError("Failed to recreate devcontainer for %s: %v", repo, err)
-			return // Don't update tracked SHA if recreation failed so it retries next time
-		}
-
-		trackedSHAs[repo] = latestSHA
-		saveTrackedSHAs(trackedSHAs)
-		log.Printf("Successfully updated devcontainer for %s", repo)
-	} else {
-		projectName := filepath.Base(repo)
-		if !isContainerRunning(projectName, currentWorkspaces) {
-			log.Printf("No new updates for %s, but container is not running. Bringing it up...", repo)
-			if err := bringUpDevcontainer(repo, currentWorkspaces); err != nil {
-				notifyError("Failed to bring up devcontainer for %s: %v", repo, err)
-				return
+	for _, repo := range repos {
+		id := strings.ReplaceAll(repo, "/", "-")
+		if !running[id] {
+			log.Printf("Starting devcontainer for %s", repo)
+			cmd := exec.Command("devpod", "up", fmt.Sprintf("https://github.com/%s", repo), "--id", id, "--detach")
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				log.Printf("Failed to start devcontainer for %s: %v (output: %s)", repo, err, string(out))
 			}
-		} else {
-			log.Printf("No new updates for %s, and container is running", repo)
 		}
 	}
-}
-
-func getLatestDevcontainerCommit(repo string) (string, error) {
-	// Check .devcontainer updates
-	shaDot, errDot := getLatestCommitForPath(repo, ".devcontainer")
-	// Check devcontainer.json updates
-	shaFile, errFile := getLatestCommitForPath(repo, "devcontainer.json")
-
-	if errDot != nil && errFile != nil {
-		// Log errors but we might just return empty strings instead of failing
-		log.Printf("Warnings getting commits: .devcontainer(%v), devcontainer.json(%v)", errDot, errFile)
-	}
-
-	// We'll combine the SHAs as a composite key. If either changes, the composite changes.
-	return fmt.Sprintf("%s-%s", shaDot, shaFile), nil
-}
-
-func getLatestCommitForPath(repo, path string) (string, error) {
-	cmd := exec.Command("gh", "api", fmt.Sprintf("repos/%s/commits?path=%s&per_page=1", repo, path))
-	output, err := cmd.Output()
-	if err != nil {
-		// gh api returns failure on 404s (e.g., path not found or repo not found)
-		return "", err
-	}
-
-	var commits []Commit
-	if err := json.Unmarshal(output, &commits); err != nil {
-		return "", err
-	}
-
-	if len(commits) > 0 {
-		return commits[0].Sha, nil
-	}
-
-	return "", nil
-}
-
-func recreateDevcontainer(repo string, currentWorkspaces map[string]Workspace) error {
-	projectName := filepath.Base(repo)
-
-	if err := deleteDevcontainer(repo); err != nil {
-		log.Printf("Warning: delete error ignored during recreation for %s: %v", repo, err)
-	}
-
-	log.Printf("Creating new devcontainer for %s with id %s...", repo, projectName)
-	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("git@github.com:%s.git", repo), "--id", projectName, "--reset", "--ide", ideChoice)
-	log.Printf("Running command: %s", strings.Join(upCmd.Args, " "))
-	upOut, err := upCmd.CombinedOutput()
-	log.Printf("%s up output: %s", devpodExe, string(upOut))
-
-	if err != nil {
-		return fmt.Errorf("%s up failed: %w", devpodExe, err)
-	}
-
-	// Refresh workspaces to get the new UID if it changed (it shouldn't for the same ID, but safe)
-	newWorkspaces, err := getExistingWorkspaces()
-	if err != nil {
-		return fmt.Errorf("failed to refresh workspaces after up: %w", err)
-	}
-	renameDockerContainer(projectName, newWorkspaces)
 
 	return nil
 }
 
-func bringUpDevcontainer(repo string, currentWorkspaces map[string]Workspace) error {
-	projectName := filepath.Base(repo)
+const (
+	devpodExe = "devpod"
+)
 
-	log.Printf("Bringing up devcontainer for %s with id %s...", repo, projectName)
-	upCmd := exec.Command(devpodExe, "up", fmt.Sprintf("git@github.com:%s.git", repo), "--id", projectName, "--ide", ideChoice)
-	log.Printf("Running command: %s", strings.Join(upCmd.Args, " "))
-	upOut, err := upCmd.CombinedOutput()
-	log.Printf("%s up output: %s", devpodExe, string(upOut))
-
+func stopContainer(id string) error {
+	stopCmd := exec.Command(devpodExe, "stop", id)
+	stopOut, err := stopCmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%s up failed: %w", devpodExe, err)
+		return fmt.Errorf("%s stop failed: %w (output: %s)", devpodExe, err, string(stopOut))
 	}
 
-	// Refresh workspaces to get the new UID
-	newWorkspaces, err := getExistingWorkspaces()
-	if err != nil {
-		return fmt.Errorf("failed to refresh workspaces after up: %w", err)
-	}
-	renameDockerContainer(projectName, newWorkspaces)
-
+	log.Printf("Successfully stopped devcontainer %s", id)
 	return nil
 }
 
-// notifyError uses the Linux notify-send command to show a critical desktop notification,
-// instead of just printing to the console, so the user doesn't miss errors from this background process.
-func notifyError(format string, v ...interface{}) {
-	msg := fmt.Sprintf(format, v...)
-	log.Print(msg)
-	exec.Command("notify-send", "-u", "critical", "Devcontainer Manager Error", msg).Run()
-}
-
-// notifyFatal shows a critical desktop notification and then exits the program.
-func notifyFatal(format string, v ...interface{}) {
-	notifyError(format, v...)
-	os.Exit(1)
-}
-
-func renameDockerContainer(projectName string, currentWorkspaces map[string]Workspace) {
-	log.Printf("Attempting to rename docker container to %s...", projectName)
-
-	targetUID := ""
-	if ws, ok := currentWorkspaces[projectName]; ok {
-		targetUID = ws.UID
-	}
-
-	out, err := exec.Command("docker", "ps", "--format", "{{.ID}}|{{.Names}}|{{.Image}}|{{.Labels}}").Output()
-	if err != nil {
-		log.Printf("Error running docker ps: %v", err)
-		return
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	var targetID, currentName string
-
-	// 1. Try to find by UID match
-	if targetUID != "" {
-		for _, line := range lines {
-			if line == "" {
-				continue
-			}
-			parts := strings.Split(line, "|")
-			if len(parts) >= 4 {
-				id, name, labels := parts[0], parts[1], parts[3]
-				// Devpod uses dev.containers.id for its internal UID
-				if strings.Contains(labels, fmt.Sprintf("%s%s", VscLabelPrefix, targetUID)) {
-					targetID, currentName = id, name
-					break
-				}
-			}
-		}
-	}
-
-	// 2. Fallback to name match if we haven't found it and it's not already named correctly
-	if targetID == "" {
-		for _, line := range lines {
-			if line == "" {
-				continue
-			}
-			parts := strings.Split(line, "|")
-			if len(parts) >= 2 {
-				id, name := parts[0], parts[1]
-				if name == projectName {
-					targetID, currentName = id, name
-					break
-				}
-			}
-		}
-	}
-
-	// 3. Fallback to image name heuristics for un-renamed containers
-	if targetID == "" {
-		for _, line := range lines {
-			if line == "" {
-				continue
-			}
-			parts := strings.Split(line, "|")
-			if len(parts) >= 4 {
-				id, name, image, labels := parts[0], parts[1], parts[2], parts[3]
-				// Skip if it definitely belongs to another known workspace UID
-				belongsToOther := false
-				for _, ws := range currentWorkspaces {
-					if ws.ID != projectName && strings.Contains(labels, ws.UID) {
-						belongsToOther = true
-						break
-					}
-				}
-				if belongsToOther {
-					continue
-				}
-
-				if strings.Contains(image, "devpod-") || strings.Contains(image, "vsc-") {
-					if name != projectName {
-						targetID, currentName = id, name
-						break
-					}
-				}
-			}
-		}
-	}
-
-	if targetID != "" {
-		if currentName == projectName {
-			log.Printf("Container %s is already named %s", targetID, projectName)
-			return
-		}
-
-		log.Printf("Renaming container %s (currently %s) to %s", targetID, currentName, projectName)
-		if err := exec.Command("docker", "rename", targetID, projectName).Run(); err != nil {
-			log.Printf("Failed to rename container: %v", err)
-		} else {
-			log.Printf("Successfully renamed container to %s", projectName)
-		}
-	} else {
-		log.Printf("Could not identify which container to rename for %s", projectName)
-	}
-}
-
-func isContainerRunning(projectName string, currentWorkspaces map[string]Workspace) bool {
-	targetUID := ""
-	if ws, ok := currentWorkspaces[projectName]; ok {
-		targetUID = ws.UID
-	}
-
-	out, err := exec.Command("docker", "ps", "--format", "{{.Names}}|{{.Labels}}").Output()
-	if err != nil {
-		return false
-	}
-
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line == "" {
-			continue
-		}
-		parts := strings.Split(line, "|")
-		if len(parts) >= 2 {
-			name, labels := parts[0], parts[1]
-			if name == projectName {
-				return true
-			}
-			if targetUID != "" && strings.Contains(labels, fmt.Sprintf("%s%s", VscLabelPrefix, targetUID)) {
-				return true
-			}
-			// Fallback: also check DevpodLabelPrefix for old versions or specific provider metadata
-			if strings.Contains(labels, fmt.Sprintf("%s%s", DevpodLabelPrefix, projectName)) {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-func deleteDevcontainer(repo string) error {
-	projectName := filepath.Base(repo)
-	log.Printf("Initiating devcontainer deletion for repository '%s' (project ID: '%s')...", repo, projectName)
-	return deleteDevcontainerByID(projectName)
-}
-
-func deleteDevcontainerByID(id string) error {
-	log.Printf("Deleting devcontainer with id: %s...", id)
+func deleteContainer(id string) error {
 	deleteCmd := exec.Command(devpodExe, "delete", id)
 	deleteOut, err := deleteCmd.CombinedOutput()
 	if err != nil {
@@ -568,4 +130,49 @@ func deleteDevcontainerByID(id string) error {
 
 	log.Printf("Successfully deleted devcontainer %s", id)
 	return nil
+}
+
+func sortReposByLastUpdated(repos []string) {
+	log.Printf("Sorting repositories by most recently touched...")
+	type RepoUpdate struct {
+		Name     string
+		PushedAt time.Time
+	}
+
+	updates := make([]RepoUpdate, len(repos))
+	var wg sync.WaitGroup
+
+	for i, repo := range repos {
+		wg.Add(1)
+		go func(index int, r string) {
+			defer wg.Done()
+			updates[index].Name = r
+
+			cmd := exec.Command("gh", "api", fmt.Sprintf("repos/%s", r), "--jq", ".pushed_at")
+			out, err := cmd.Output()
+			if err == nil {
+				pushedAtStr := strings.TrimSpace(string(out))
+				// Remove quotes if present from jq output
+				pushedAtStr = strings.Trim(pushedAtStr, "\"")
+				t, err := time.Parse(time.RFC3339, pushedAtStr)
+				if err == nil {
+					updates[index].PushedAt = t
+				} else {
+					log.Printf("Warning: failed to parse pushed_at for %s: %v", r, err)
+				}
+			} else {
+				log.Printf("Warning: failed to fetch pushed_at for %s: %v", r, err)
+			}
+		}(i, repo)
+	}
+
+	wg.Wait()
+
+	sort.SliceStable(updates, func(i, j int) bool {
+		return updates[i].PushedAt.After(updates[j].PushedAt)
+	})
+
+	for i, update := range updates {
+		repos[i] = update.Name
+	}
 }

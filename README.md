@@ -30,7 +30,7 @@ This script will:
 The daemon automatically ensures that the underlying Docker containers perfectly match their corresponding project names, even when multiple disjoint environments run simultaneously, by referencing their dedicated workspace IDs.
 
 ## Supported Projects
-Adding support for `brotherlogic/focus`, `brotherlogic/gramophile`, `brotherlogic/recordalerting`, `brotherlogic/recordcollection`, `brotherlogic/recordgetter`, `brotherlogic/sale-description-generator`, `brotherlogic/prod` and `brotherlogic/seraphine` and their specific environment needs.
+The managed projects are defined in `container.list.template`.
 
 ## Improved Observability
 The manager now logs the full `devpod-cli up` command it executes when starting or recreating a container. This provides better visibility into the background operations and simplifies debugging of the container lifecycle.
@@ -38,12 +38,19 @@ The manager now logs the full `devpod-cli up` command it executes when starting 
 ## SSH for DevPod
 The manager now uses SSH repository URLs (`git@github.com:...`) instead of HTTPS shorthand when calling `devpod-cli up`. This ensures that DevPod utilizes your local SSH credentials for repository operations.
 
+## Port Mapping & Discovery Support
+The manager automatically allocates a unique SSH port for each devcontainer (starting from 2222) and maps it to the container's SSH port (22) using `--provider-option DOCKER_RUN_ARGS=`. 
+
+Allocated ports are advertised by pushing a `mappings.json` file to the `brotherlogic/devcontainer-manager` repository. The manager automatically generates and registers an SSH deploy key to bypass pull request requirements for these updates. This allows tools like `dcrouter` to discover and route SSH connections to the correct container.
 
 ## Version Tracking
 The manager now prints the git SHA of the build on startup, allowing you to easily identify which version of the code is running. This information is automatically extracted from the build metadata.
+
+## Container Prioritization
+The manager dynamically orders container startup operations, prioritizing repositories that have been most recently updated (pushed) on GitHub. This ensures the projects you are actively working on are spun up first.
 
 ## Hooray
 
 Hooray
 
-// dummy comment for CI validation
+// dummy comment for recordcleaner CI validation
