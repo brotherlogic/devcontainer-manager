@@ -19,6 +19,7 @@ brotherlogic/pgstore
 brotherlogic/prod
 brotherlogic/recordgetter
 brotherlogic/recordcollection
+brotherlogic/recordcleaner
 brotherlogic/recorder
 brotherlogic/roofing
 brotherlogic/seraphine
