@@ -111,28 +111,29 @@ func run(ctx context.Context, containerList string) error {
 				log.Printf("Failed to start devcontainer for %s: %v (output: %s)", repo, err, string(out))
 			} else {
 				if client != nil {
-					compositeSHA, err := getRepoCompositeSHA(ctx, client, repo)
-					if err == nil {
-						trackedSHAs[repo] = compositeSHA
-						saveTrackedSHAs(trackedSHAs)
-					} else {
+					compositeSHA, found, err := getRepoCompositeSHA(ctx, client, repo)
+					if err == nil && found {
+						updateAndSaveRepoSHA(repo, compositeSHA, trackedSHAs)
+					} else if err != nil {
 						log.Printf("Warning: failed to get composite SHA for %s: %v", repo, err)
 					}
 				}
 			}
 		} else {
 			if client != nil {
-				compositeSHA, err := getRepoCompositeSHA(ctx, client, repo)
+				compositeSHA, found, err := getRepoCompositeSHA(ctx, client, repo)
 				if err != nil {
 					log.Printf("Warning: failed to get composite SHA for %s: %v", repo, err)
+					continue
+				}
+				if !found {
 					continue
 				}
 
 				lastSeen, exists := trackedSHAs[repo]
 				if !exists {
 					log.Printf("Initial tracking established for %s at %s", repo, compositeSHA)
-					trackedSHAs[repo] = compositeSHA
-					saveTrackedSHAs(trackedSHAs)
+					updateAndSaveRepoSHA(repo, compositeSHA, trackedSHAs)
 				} else if lastSeen != compositeSHA {
 					log.Printf("Detected devcontainer configuration/script change in %s! Recreating container...", repo)
 					log.Printf("Old tracking: %s", lastSeen)
@@ -142,8 +143,7 @@ func run(ctx context.Context, containerList string) error {
 					if err != nil {
 						log.Printf("Failed to recreate devcontainer for %s: %v", repo, err)
 					} else {
-						trackedSHAs[repo] = compositeSHA
-						saveTrackedSHAs(trackedSHAs)
+						updateAndSaveRepoSHA(repo, compositeSHA, trackedSHAs)
 					}
 				}
 			}
@@ -241,8 +241,15 @@ func loadTrackedSHAs() map[string]string {
 	shas := make(map[string]string)
 
 	bytes, err := os.ReadFile(trackerPath)
-	if err == nil {
-		json.Unmarshal(bytes, &shas)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("Warning: failed to read tracked SHAs file %s: %v", trackerPath, err)
+		}
+		return shas
+	}
+
+	if err := json.Unmarshal(bytes, &shas); err != nil {
+		log.Printf("Warning: failed to unmarshal tracked SHAs from %s: %v", trackerPath, err)
 	}
 	return shas
 }
@@ -254,6 +261,13 @@ func saveTrackedSHAs(shas map[string]string) error {
 		return err
 	}
 	return os.WriteFile(trackerPath, bytes, 0644)
+}
+
+func updateAndSaveRepoSHA(repo string, sha string, trackedSHAs map[string]string) {
+	trackedSHAs[repo] = sha
+	if err := saveTrackedSHAs(trackedSHAs); err != nil {
+		log.Printf("Warning: failed to save tracked SHAs: %v", err)
+	}
 }
 
 func stripComments(jsonStr string) string {
@@ -325,9 +339,43 @@ func cleanJSON(jsonStr string) string {
 }
 
 func extractTokens(cmd string) []string {
-	r := strings.NewReplacer("&&", " ", "||", " ", ";", " ", "|", " ", "\"", " ", "'", " ")
-	cmdCleaned := r.Replace(cmd)
-	return strings.Fields(cmdCleaned)
+	var tokens []string
+	var current strings.Builder
+	inDoubleQuote := false
+	inSingleQuote := false
+	escaped := false
+
+	for _, r := range cmd {
+		if escaped {
+			current.WriteRune(r)
+			escaped = false
+			continue
+		}
+		if r == '\\' {
+			escaped = true
+			continue
+		}
+		if r == '"' && !inSingleQuote {
+			inDoubleQuote = !inDoubleQuote
+			continue
+		}
+		if r == '\'' && !inDoubleQuote {
+			inSingleQuote = !inSingleQuote
+			continue
+		}
+		if (r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == ';' || r == '&' || r == '|') && !inDoubleQuote && !inSingleQuote {
+			if current.Len() > 0 {
+				tokens = append(tokens, current.String())
+				current.Reset()
+			}
+			continue
+		}
+		current.WriteRune(r)
+	}
+	if current.Len() > 0 {
+		tokens = append(tokens, current.String())
+	}
+	return tokens
 }
 
 func isScriptCandidate(token string) bool {
@@ -340,9 +388,11 @@ func isScriptCandidate(token string) bool {
 	}
 	builtins := map[string]bool{
 		"bash": true, "sh": true, "zsh": true, "sudo": true, "apt": true, "go": true,
-		"python": true, "pip": true, "npm": true, "yarn": true, "node": true, "echo": true,
-		"cat": true, "mkdir": true, "cd": true, "rm": true, "mv": true, "cp": true,
-		"chmod": true, "chown": true, "env": true, "export": true, "git": true, "make": true,
+		"python": true, "python3": true, "pip": true, "npm": true, "yarn": true, "node": true,
+		"echo": true, "cat": true, "mkdir": true, "cd": true, "rm": true, "mv": true,
+		"cp": true, "chmod": true, "chown": true, "env": true, "export": true, "git": true,
+		"make": true, "docker": true, "kubectl": true, "az": true, "gcloud": true, "curl": true,
+		"wget": true, "tar": true, "unzip": true, "grep": true, "sed": true, "awk": true,
 	}
 	if builtins[token] {
 		return false
@@ -353,7 +403,7 @@ func isScriptCandidate(token string) bool {
 			return true
 		}
 	}
-	if (strings.HasPrefix(token, "./") || strings.Contains(token, "/")) && !strings.Contains(token, "://") {
+	if (strings.HasPrefix(token, "/") || strings.HasPrefix(token, "./") || strings.HasPrefix(token, "../") || strings.Contains(token, "/")) && !strings.Contains(token, "://") {
 		return true
 	}
 	return false
@@ -423,24 +473,13 @@ func extractScriptsFromJSON(jsonContent string) []string {
 
 func extractScriptsViaRegex(content string) []string {
 	var result []string
-	scriptKeys := []string{
-		"initializeCommand",
-		"onCreateCommand",
-		"updateContentCommand",
-		"postCreateCommand",
-		"postStartCommand",
-		"postAttachCommand",
-	}
-
-	for _, key := range scriptKeys {
-		re := regexp.MustCompile(fmt.Sprintf(`"%s"\s*:\s*"([^"]+)"`, key))
-		matches := re.FindAllStringSubmatch(content, -1)
-		for _, match := range matches {
-			if len(match) > 1 {
-				for _, token := range extractTokens(match[1]) {
-					if isScriptCandidate(token) {
-						result = append(result, normalizePath(token))
-					}
+	re := regexp.MustCompile(`"([^"]+)"`)
+	matches := re.FindAllStringSubmatch(content, -1)
+	for _, match := range matches {
+		if len(match) > 1 {
+			for _, token := range extractTokens(match[1]) {
+				if isScriptCandidate(token) {
+					result = append(result, normalizePath(token))
 				}
 			}
 		}
@@ -484,10 +523,10 @@ func getFileSHA(ctx context.Context, client *github.Client, owner, repoName, pat
 	return fileContent.GetSHA(), true
 }
 
-func getRepoCompositeSHA(ctx context.Context, client *github.Client, repo string) (string, error) {
+func getRepoCompositeSHA(ctx context.Context, client *github.Client, repo string) (string, bool, error) {
 	parts := strings.Split(repo, "/")
 	if len(parts) != 2 {
-		return "", fmt.Errorf("invalid repository format: %s", repo)
+		return "", false, fmt.Errorf("invalid repository format: %s", repo)
 	}
 	owner, repoName := parts[0], parts[1]
 
@@ -510,7 +549,7 @@ func getRepoCompositeSHA(ctx context.Context, client *github.Client, repo string
 	}
 
 	if !found {
-		return "no-devcontainer", nil
+		return "", false, nil
 	}
 
 	shaMap := map[string]string{
@@ -540,7 +579,7 @@ func getRepoCompositeSHA(ctx context.Context, client *github.Client, repo string
 		partsSHA = append(partsSHA, fmt.Sprintf("%s:%s", k, shaMap[k]))
 	}
 
-	return strings.Join(partsSHA, "|"), nil
+	return strings.Join(partsSHA, "|"), true, nil
 }
 
 func recreateContainer(repo string, id string) error {
