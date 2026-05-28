@@ -2,9 +2,14 @@
 	"name": "Devcontainer Manager",
     "image": "mcr.microsoft.com/devcontainers/base:noble",
     "features": {
+		"ghcr.io/devcontainers/features/common-utils:2": {
+			"installOhMyZsh": true,
+			"upgradePackages": true,
+			"installZsh": true,
+			"configureZshAsDefaultShell": true
+		},
 		"ghcr.io/devcontainers/features/github-cli:1": {},
-      "ghcr.io/siri404/devcontainer-ai-features/gemini-cli:1": {},
-      "ghcr.io/devcontainers/features/go:1": {}
+     "ghcr.io/devcontainers/features/go:1": {}
 	},
 	"customizations": {
 		"vscode": {
