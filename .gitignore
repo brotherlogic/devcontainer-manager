@@ -2,3 +2,4 @@
 container.list
 devcontainer-manager
 .devcontainer/.env.auth
+.antigravitycli
