@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -225,6 +226,122 @@ func run(ctx context.Context, cfg *config) error {
 								log.Printf("Failed to launch devcontainer for issue %d: %v (output: %s)", issueNumber, err, string(out))
 							} else {
 								running[containerID] = true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Resource Management & Cleanup Logic for issue containers
+	if client != nil {
+		projectRepoMap := make(map[string]string)
+		for _, repo := range repos {
+			pID := strings.ReplaceAll(repo, "/", "-")
+			projectRepoMap[pID] = repo
+		}
+
+		outList, errList := commandRunner("devpod", "list")
+		if errList == nil {
+			containerStates := make(map[string]string)
+			for _, line := range strings.Split(string(outList), "\n") {
+				fields := strings.Fields(line)
+				if len(fields) > 1 {
+					containerStates[fields[0]] = fields[1]
+				}
+			}
+
+			// 1. Hibernation Logic
+			type issueContainer struct {
+				id        string
+				updatedAt time.Time
+			}
+			var runningIssues []issueContainer
+
+			for id, state := range containerStates {
+				if strings.Contains(id, "-issue-") && state == "Running" {
+					parts := strings.Split(id, "-issue-")
+					if len(parts) == 2 {
+						projectID := parts[0]
+						issueNumber, errNum := strconv.Atoi(parts[1])
+						repo := projectRepoMap[projectID]
+						if errNum == nil && repo != "" {
+							partsRepo := strings.Split(repo, "/")
+							if len(partsRepo) == 2 {
+								owner, repoName := partsRepo[0], partsRepo[1]
+								issue, _, errGet := client.Issues.Get(ctx, owner, repoName, issueNumber)
+								if errGet == nil {
+									runningIssues = append(runningIssues, issueContainer{
+										id:        id,
+										updatedAt: issue.GetUpdatedAt().Time,
+									})
+								}
+							}
+						}
+					}
+				}
+			}
+
+			if len(runningIssues) > cfg.maxIssueContainers {
+				sort.Slice(runningIssues, func(i, j int) bool {
+					return runningIssues[i].updatedAt.Before(runningIssues[j].updatedAt)
+				})
+				excess := len(runningIssues) - cfg.maxIssueContainers
+				for i := 0; i < excess; i++ {
+					log.Printf("Hibernating oldest running issue container: %s", runningIssues[i].id)
+					_, errStop := commandRunner("devpod", "stop", runningIssues[i].id)
+					if errStop != nil {
+						log.Printf("Warning: failed to stop container %s during hibernation: %v", runningIssues[i].id, errStop)
+					}
+				}
+			}
+
+			// 2. Cleanup Logic
+			for id := range containerStates {
+				if strings.Contains(id, "-issue-") {
+					parts := strings.Split(id, "-issue-")
+					if len(parts) == 2 {
+						projectID := parts[0]
+						issueNumber, errNum := strconv.Atoi(parts[1])
+						repo := projectRepoMap[projectID]
+						if errNum == nil && repo != "" {
+							partsRepo := strings.Split(repo, "/")
+							if len(partsRepo) == 2 {
+								owner, repoName := partsRepo[0], partsRepo[1]
+								issue, resp, errGet := client.Issues.Get(ctx, owner, repoName, issueNumber)
+
+								shouldCleanup := false
+								if errGet == nil {
+									if issue.GetState() == "closed" {
+										shouldCleanup = true
+									} else {
+										hasSeraphineLabel := false
+										for _, label := range issue.Labels {
+											if strings.HasPrefix(label.GetName(), "seraphine") {
+												hasSeraphineLabel = true
+												break
+											}
+										}
+										if !hasSeraphineLabel {
+											shouldCleanup = true
+										}
+									}
+								} else if resp != nil && resp.StatusCode == http.StatusNotFound {
+									shouldCleanup = true
+								}
+
+								if shouldCleanup {
+									log.Printf("Cleaning up finished/unlabeled issue container: %s", id)
+									_, errStop := commandRunner("devpod", "stop", id)
+									if errStop != nil {
+										log.Printf("Warning: failed to stop container %s during cleanup: %v", id, errStop)
+									}
+									_, errDelete := commandRunner("devpod", "delete", id)
+									if errDelete != nil {
+										log.Printf("Failed to delete container %s during cleanup: %v", id, errDelete)
+									}
+								}
 							}
 						}
 					}
