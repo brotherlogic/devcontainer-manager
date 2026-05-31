@@ -44,18 +44,44 @@ func getGHClient() (*github.Client, error) {
 	return github.NewClient(tc), nil
 }
 
+type config struct {
+	once               bool
+	containerList      string
+	maxIssueContainers int
+}
+
+func parseFlags(args []string) (*config, error) {
+	fs := flag.NewFlagSet("devcontainer-manager", flag.ContinueOnError)
+	once := fs.Bool("once", false, "Run once and exit")
+	containerList := fs.String("container_list", "container.list.template", "The list of containers to run")
+	maxIssueContainers := fs.Int("max_issue_containers", 5, "Maximum number of concurrent running issue containers")
+
+	err := fs.Parse(args)
+	if err != nil {
+		return nil, err
+	}
+
+	return &config{
+		once:               *once,
+		containerList:      *containerList,
+		maxIssueContainers: *maxIssueContainers,
+	}, nil
+}
+
 func main() {
-	var runOnce = flag.Bool("once", false, "Run once and exit")
-	var containerList = flag.String("container_list", "container.list.template", "The list of containers to run")
-	flag.Parse()
+	cfg, err := parseFlags(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
+		os.Exit(1)
+	}
 
 	for {
-		err := run(context.Background(), *containerList)
+		err := run(context.Background(), cfg)
 		if err != nil {
 			log.Printf("Error: %v", err)
 		}
 
-		if *runOnce {
+		if cfg.once {
 			break
 		}
 
@@ -63,8 +89,8 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, containerList string) error {
-	data, err := os.ReadFile(containerList)
+func run(ctx context.Context, cfg *config) error {
+	data, err := os.ReadFile(cfg.containerList)
 	if err != nil {
 		return fmt.Errorf("failed to read container list: %w", err)
 	}

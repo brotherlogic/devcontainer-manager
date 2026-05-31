@@ -3,15 +3,29 @@ name: Auto Merge
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled]
+  workflow_run:
+    workflows: ["Validate PR"]
+    types:
+      - completed
 
 jobs:
   enable-automerge:
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'pull_request' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Enable Auto-Merge for PR
         env:
           GH_TOKEN: ${{ secrets.PERSONAL_TOKEN }} # Same token used in pr.yml to ensure adequate permissions
         run: |
-          # The --auto flag tells GitHub to wait for all required status checks to turn green before squashing!
-          echo "Enabling Github Auto-Merge for PR #${{ github.event.pull_request.number }}"
-          gh pr merge "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --auto --squash || echo "Auto-merge might already be enabled or requires repo settings configuration."
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+            PR_NUMBER=$(gh pr list -H "$HEAD_BRANCH" --limit 1 --json number --jq '.[0].number')
+            if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
+              PR_NUMBER=$(gh pr list -s open --limit 1 --json number --jq '.[0].number')
+            fi
+          else
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+          fi
+
+          echo "Enabling Github Auto-Merge for PR #$PR_NUMBER"
+          gh pr merge "$PR_NUMBER" --repo "${{ github.repository }}" --auto --squash || echo "Auto-merge might already be enabled or requires repo settings configuration."
