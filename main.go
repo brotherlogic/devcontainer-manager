@@ -621,3 +621,28 @@ func recreateContainer(repo string, id string) error {
 	log.Printf("Successfully recreated devcontainer for %s", repo)
 	return nil
 }
+
+var runAgyCommand = func(ctx context.Context, prompt string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "agy", "--prompt", prompt)
+	return cmd.Output()
+}
+
+func deriveFeatureSlug(ctx context.Context, title string) (string, error) {
+	prompt := fmt.Sprintf("Given the GitHub issue title: '%s', generate a 3-word slug summarizing the feature. Output exactly three lowercase words separated by underscores, with no other text, punctuation, or explanation.", title)
+	output, err := runAgyCommand(ctx, prompt)
+	if err != nil {
+		return "", err
+	}
+
+	slug := strings.TrimSpace(string(output))
+	slug = strings.ToLower(slug)
+
+	var sb strings.Builder
+	for _, r := range slug {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			sb.WriteRune(r)
+		}
+	}
+
+	return sb.String(), nil
+}
