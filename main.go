@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path"
@@ -668,4 +669,50 @@ var defaultDeriver = &slugDeriver{
 
 func deriveFeatureSlug(ctx context.Context, title string) (string, error) {
 	return defaultDeriver.derive(ctx, title)
+}
+
+func ensureIssueBranchExists(ctx context.Context, client *github.Client, owner, repoName, branchName string) error {
+	refName := "heads/" + branchName
+	_, resp, err := client.Git.GetRef(ctx, owner, repoName, refName)
+	if err == nil {
+		return nil
+	}
+
+	if resp == nil || resp.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("failed to check if branch %s exists: %w", branchName, err)
+	}
+
+	// 1. Retrieve the default branch name dynamically
+	repo, _, err := client.Repositories.Get(ctx, owner, repoName)
+	if err != nil {
+		return fmt.Errorf("failed to get repository info: %w", err)
+	}
+	defaultBranch := repo.GetDefaultBranch()
+	if defaultBranch == "" {
+		defaultBranch = "main"
+	}
+
+	// 2. Fetch the latest commit SHA of the default branch
+	defaultRefName := "heads/" + defaultBranch
+	defaultRef, _, err := client.Git.GetRef(ctx, owner, repoName, defaultRefName)
+	if err != nil {
+		return fmt.Errorf("failed to get default branch ref %s: %w", defaultBranch, err)
+	}
+	latestSHA := defaultRef.GetObject().GetSHA()
+	if latestSHA == "" {
+		return fmt.Errorf("failed to get commit SHA for default branch %s", defaultBranch)
+	}
+
+	// 3. Create the new branch reference
+	targetRef := "refs/heads/" + branchName
+	ref := &github.Reference{
+		Ref:    github.String(targetRef),
+		Object: &github.GitObject{SHA: github.String(latestSHA)},
+	}
+	_, _, err = client.Git.CreateRef(ctx, owner, repoName, ref)
+	if err != nil {
+		return fmt.Errorf("failed to create branch ref: %w", err)
+	}
+
+	return nil
 }
