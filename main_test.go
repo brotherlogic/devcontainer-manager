@@ -247,7 +247,7 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 	var capturedCommands [][]string
 	commandRunner = func(name string, args ...string) ([]byte, error) {
 		capturedCommands = append(capturedCommands, append([]string{name}, args...))
-		if name == "devpod" && len(args) > 0 && args[0] == "list" {
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			// Return list containing only the standard container (not the issue container)
 			return []byte("test-owner-test-repo Running\n"), nil
 		}
@@ -308,7 +308,7 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 	// Verify that devpod up was called with the correct parameters
 	var devpodUpCalled bool
 	for _, cmd := range capturedCommands {
-		if cmd[0] == "devpod" && cmd[1] == "up" {
+		if cmd[0] == devpodExe && cmd[1] == "up" {
 			devpodUpCalled = true
 			expectedURL := "https://github.com/test-owner/test-repo@feature/mock_feature_slug_42"
 			if cmd[2] != expectedURL {
@@ -403,7 +403,7 @@ func TestRun_SkipLaunchIfAlreadyActive(t *testing.T) {
 
 	// Verify that devpod up was NOT called for issue 42
 	for _, cmd := range capturedCommands {
-		if cmd[0] == "devpod" && cmd[1] == "up" {
+		if cmd[0] == devpodExe && cmd[1] == "up" {
 			if len(cmd) > 4 && cmd[4] == "test-owner-test-repo-issue-42" {
 				t.Errorf("did not expect devpod up to be called for issue 42, but it was")
 			}
@@ -448,7 +448,7 @@ func TestRun_HibernationOfOldestContainers(t *testing.T) {
 	var capturedCommands [][]string
 	commandRunner = func(name string, args ...string) ([]byte, error) {
 		capturedCommands = append(capturedCommands, append([]string{name}, args...))
-		if name == "devpod" && len(args) > 0 && args[0] == "list" {
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			// Return list containing standard container and 3 running issue containers
 			return []byte("test-owner-test-repo Running\ntest-owner-test-repo-issue-1 Running\ntest-owner-test-repo-issue-2 Running\ntest-owner-test-repo-issue-3 Running\n"), nil
 		}
@@ -499,7 +499,7 @@ func TestRun_HibernationOfOldestContainers(t *testing.T) {
 	// Verify that devpod stop was called on the oldest running container (issue 1)
 	var stopCommandCalledForIssue1 bool
 	for _, cmd := range capturedCommands {
-		if cmd[0] == "devpod" && cmd[1] == "stop" && cmd[2] == "test-owner-test-repo-issue-1" {
+		if cmd[0] == devpodExe && cmd[1] == "stop" && cmd[2] == "test-owner-test-repo-issue-1" {
 			stopCommandCalledForIssue1 = true
 		}
 	}
@@ -546,7 +546,7 @@ func TestRun_CleanupOfClosedOrUnlabeledContainers(t *testing.T) {
 	var capturedCommands [][]string
 	commandRunner = func(name string, args ...string) ([]byte, error) {
 		capturedCommands = append(capturedCommands, append([]string{name}, args...))
-		if name == "devpod" && len(args) > 0 && args[0] == "list" {
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			// Return list containing standard container and 1 running issue container (issue 4)
 			return []byte("test-owner-test-repo Running\ntest-owner-test-repo-issue-4 Running\n"), nil
 		}
@@ -588,10 +588,10 @@ func TestRun_CleanupOfClosedOrUnlabeledContainers(t *testing.T) {
 	var stopCommandCalled bool
 	var deleteCommandCalled bool
 	for _, cmd := range capturedCommands {
-		if cmd[0] == "devpod" && cmd[1] == "stop" && cmd[2] == "test-owner-test-repo-issue-4" {
+		if cmd[0] == devpodExe && cmd[1] == "stop" && cmd[2] == "test-owner-test-repo-issue-4" {
 			stopCommandCalled = true
 		}
-		if cmd[0] == "devpod" && cmd[1] == "delete" && cmd[2] == "test-owner-test-repo-issue-4" {
+		if cmd[0] == devpodExe && cmd[1] == "delete" && cmd[2] == "test-owner-test-repo-issue-4" {
 			deleteCommandCalled = true
 		}
 	}

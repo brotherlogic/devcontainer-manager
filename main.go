@@ -46,6 +46,14 @@ func getGHClient() (*github.Client, error) {
 	return github.NewClient(tc), nil
 }
 
+var devpodExe = "devpod"
+
+func init() {
+	if _, err := exec.LookPath("devpod-cli"); err == nil {
+		devpodExe = "devpod-cli"
+	}
+}
+
 var commandRunner = func(name string, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
 	return cmd.CombinedOutput()
@@ -116,7 +124,7 @@ func run(ctx context.Context, cfg *config) error {
 	sortReposByLastUpdated(repos)
 
 	// Get running devcontainers
-	out, err := commandRunner("devpod", "list")
+	out, err := commandRunner(devpodExe, "list")
 	if err != nil {
 		return fmt.Errorf("failed to list devcontainers: %w", err)
 	}
@@ -140,7 +148,7 @@ func run(ctx context.Context, cfg *config) error {
 		log.Printf("DEBUG: repo is %s, client is nil? %v", repo, client == nil)
 		if !running[id] {
 			log.Printf("Starting devcontainer for %s", repo)
-			out, err := commandRunner("devpod", "up", fmt.Sprintf("https://github.com/%s", repo), "--id", id, "--detach")
+			out, err := commandRunner(devpodExe, "up", fmt.Sprintf("https://github.com/%s", repo), "--id", id, "--detach")
 			if err != nil {
 				log.Printf("Failed to start devcontainer for %s: %v (output: %s)", repo, err, string(out))
 			} else {
@@ -221,7 +229,7 @@ func run(ctx context.Context, cfg *config) error {
 
 							repoURL := fmt.Sprintf("https://github.com/%s/%s@%s", owner, repoName, branchName)
 							log.Printf("Launching issue container %s on branch %s", containerID, branchName)
-							out, err := commandRunner("devpod", "up", repoURL, "--id", containerID, "--detach")
+							out, err := commandRunner(devpodExe, "up", repoURL, "--id", containerID, "--detach")
 							if err != nil {
 								log.Printf("Failed to launch devcontainer for issue %d: %v (output: %s)", issueNumber, err, string(out))
 							} else {
@@ -242,7 +250,7 @@ func run(ctx context.Context, cfg *config) error {
 			projectRepoMap[pID] = repo
 		}
 
-		outList, errList := commandRunner("devpod", "list")
+		outList, errList := commandRunner(devpodExe, "list")
 		if errList == nil {
 			containerStates := make(map[string]string)
 			for _, line := range strings.Split(string(outList), "\n") {
@@ -290,7 +298,7 @@ func run(ctx context.Context, cfg *config) error {
 				excess := len(runningIssues) - cfg.maxIssueContainers
 				for i := 0; i < excess; i++ {
 					log.Printf("Hibernating oldest running issue container: %s", runningIssues[i].id)
-					_, errStop := commandRunner("devpod", "stop", runningIssues[i].id)
+					_, errStop := commandRunner(devpodExe, "stop", runningIssues[i].id)
 					if errStop != nil {
 						log.Printf("Warning: failed to stop container %s during hibernation: %v", runningIssues[i].id, errStop)
 					}
@@ -333,11 +341,11 @@ func run(ctx context.Context, cfg *config) error {
 
 								if shouldCleanup {
 									log.Printf("Cleaning up finished/unlabeled issue container: %s", id)
-									_, errStop := commandRunner("devpod", "stop", id)
+									_, errStop := commandRunner(devpodExe, "stop", id)
 									if errStop != nil {
 										log.Printf("Warning: failed to stop container %s during cleanup: %v", id, errStop)
 									}
-									_, errDelete := commandRunner("devpod", "delete", id)
+									_, errDelete := commandRunner(devpodExe, "delete", id)
 									if errDelete != nil {
 										log.Printf("Failed to delete container %s during cleanup: %v", id, errDelete)
 									}
@@ -353,9 +361,6 @@ func run(ctx context.Context, cfg *config) error {
 	return nil
 }
 
-const (
-	devpodExe = "devpod"
-)
 
 func stopContainer(id string) error {
 	stopCmd := exec.Command(devpodExe, "stop", id)
@@ -787,10 +792,10 @@ func recreateContainer(repo string, id string) error {
 	if err := deleteContainer(id); err != nil {
 		log.Printf("Warning: failed to delete container %s before recreating: %v", id, err)
 	}
-	cmd := exec.Command("devpod", "up", fmt.Sprintf("https://github.com/%s", repo), "--id", id, "--detach")
+	cmd := exec.Command(devpodExe, "up", fmt.Sprintf("https://github.com/%s", repo), "--id", id, "--detach")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("devpod up failed: %w (output: %s)", err, string(out))
+		return fmt.Errorf("%s up failed: %w (output: %s)", devpodExe, err, string(out))
 	}
 	log.Printf("Successfully recreated devcontainer for %s", repo)
 	return nil
