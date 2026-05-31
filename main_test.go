@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"testing"
 
 	"github.com/google/go-github/v50/github"
@@ -206,5 +207,206 @@ func TestEnsureIssueBranchExists_DoesNotExist_CreatesIt(t *testing.T) {
 	err := ensureIssueBranchExists(context.Background(), client, "test-owner", "test-repo", "feature/my-branch")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
+	// Create a temporary container list file
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("test-owner/test-repo\n"); err != nil {
+		t.Fatalf("failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	// Mock HTTP server
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	// Inject getGitHubClient provider
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+
+	// Mock commandRunner
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		if name == "devpod" && len(args) > 0 && args[0] == "list" {
+			// Return list containing only the standard container (not the issue container)
+			return []byte("test-owner-test-repo Running\n"), nil
+		}
+		return []byte("success"), nil
+	}
+
+	// Mock agy command slug derivation
+	originalDeriverRunAgy := defaultDeriver.runAgy
+	defer func() { defaultDeriver.runAgy = originalDeriverRunAgy }()
+	defaultDeriver.runAgy = func(ctx context.Context, prompt string) ([]byte, error) {
+		return []byte("mock_feature_slug"), nil
+	}
+
+	// Setup GitHub API mock responses
+	// 1. Fetching open issues
+	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
+		t.Logf("Mock GitHub API: GET /repos/test-owner/test-repo/issues called")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `[
+			{
+				"number": 42,
+				"title": "My Awesome Feature",
+				"labels": [{"name": "seraphine-feature"}]
+			}
+		]`)
+	})
+
+	// 2. Fetching target branch (returns 200 OK so ensureIssueBranchExists passes immediately)
+	mux.HandleFunc("/repos/test-owner/test-repo/git/ref/heads/feature/mock_feature_slug_42", func(w http.ResponseWriter, r *http.Request) {
+		t.Logf("Mock GitHub API: GET /repos/test-owner/test-repo/git/ref/heads/feature/mock_feature_slug_42 called")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"ref": "refs/heads/feature/mock_feature_slug_42", "object": {"sha": "latest_sha"}}`)
+	})
+
+	// 3. Mock get repo composite SHA (bypass to keep test simple, returning 404/not found or composite SHA)
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		t.Logf("Mock GitHub API: GET /repos/test-owner/test-repo/contents/.devcontainer/devcontainer.json called")
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		t.Logf("Mock GitHub API: GET /repos/test-owner/test-repo/contents/devcontainer.json called")
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	cfg := &config{
+		once:               true,
+		containerList:      tmpFile.Name(),
+		maxIssueContainers: 5,
+	}
+
+	err = run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify that devpod up was called with the correct parameters
+	var devpodUpCalled bool
+	for _, cmd := range capturedCommands {
+		if cmd[0] == "devpod" && cmd[1] == "up" {
+			devpodUpCalled = true
+			expectedURL := "https://github.com/test-owner/test-repo@feature/mock_feature_slug_42"
+			if cmd[2] != expectedURL {
+				t.Errorf("expected URL %q, got %q", expectedURL, cmd[2])
+			}
+			if cmd[3] != "--id" || cmd[4] != "test-owner-test-repo-issue-42" {
+				t.Errorf("expected --id test-owner-test-repo-issue-42, got %v", cmd[3:])
+			}
+		}
+	}
+
+	if !devpodUpCalled {
+		t.Error("expected devpod up command to be called for issue 42, but it was not")
+	}
+}
+
+func TestRun_SkipLaunchIfAlreadyActive(t *testing.T) {
+	// Create a temporary container list file
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("test-owner/test-repo\n"); err != nil {
+		t.Fatalf("failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	// Mock HTTP server
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	// Inject getGitHubClient provider
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+
+	// Mock commandRunner
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		if name == "devpod" && len(args) > 0 && args[0] == "list" {
+			// Return list containing both standard and issue containers running
+			return []byte("test-owner-test-repo Running\ntest-owner-test-repo-issue-42 Running\n"), nil
+		}
+		return []byte("success"), nil
+	}
+
+	// Setup GitHub API mock responses
+	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `[
+			{
+				"number": 42,
+				"title": "My Awesome Feature",
+				"labels": [{"name": "seraphine-feature"}]
+			}
+		]`)
+	})
+
+	// Bypasses for repository content
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	cfg := &config{
+		once:               true,
+		containerList:      tmpFile.Name(),
+		maxIssueContainers: 5,
+	}
+
+	err = run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify that devpod up was NOT called for issue 42
+	for _, cmd := range capturedCommands {
+		if cmd[0] == "devpod" && cmd[1] == "up" {
+			if len(cmd) > 4 && cmd[4] == "test-owner-test-repo-issue-42" {
+				t.Errorf("did not expect devpod up to be called for issue 42, but it was")
+			}
+		}
 	}
 }
