@@ -621,3 +621,51 @@ func recreateContainer(repo string, id string) error {
 	log.Printf("Successfully recreated devcontainer for %s", repo)
 	return nil
 }
+
+type slugDeriver struct {
+	runAgy func(ctx context.Context, prompt string) ([]byte, error)
+}
+
+func (sd *slugDeriver) derive(ctx context.Context, title string) (string, error) {
+	prompt := fmt.Sprintf("Given the GitHub issue title: '%s', generate a 3-word slug summarizing the feature. Output exactly three lowercase words separated by underscores, with no other text, punctuation, or explanation.", title)
+	output, err := sd.runAgy(ctx, prompt)
+	if err != nil {
+		return "", err
+	}
+
+	slug := strings.TrimSpace(string(output))
+	slug = strings.ToLower(slug)
+
+	var sb strings.Builder
+	for _, r := range slug {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			sb.WriteRune(r)
+		}
+	}
+	cleaned := sb.String()
+
+	parts := strings.Split(cleaned, "_")
+	var words []string
+	for _, part := range parts {
+		if part != "" {
+			words = append(words, part)
+		}
+	}
+
+	if len(words) != 3 {
+		return "", fmt.Errorf("derived slug %q is invalid: must have exactly 3 words, got %d", cleaned, len(words))
+	}
+
+	return strings.Join(words, "_"), nil
+}
+
+var defaultDeriver = &slugDeriver{
+	runAgy: func(ctx context.Context, prompt string) ([]byte, error) {
+		cmd := exec.CommandContext(ctx, "agy", "--prompt", prompt)
+		return cmd.Output()
+	},
+}
+
+func deriveFeatureSlug(ctx context.Context, title string) (string, error) {
+	return defaultDeriver.derive(ctx, title)
+}
