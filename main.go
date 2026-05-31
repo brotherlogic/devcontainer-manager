@@ -45,6 +45,13 @@ func getGHClient() (*github.Client, error) {
 	return github.NewClient(tc), nil
 }
 
+var commandRunner = func(name string, args ...string) ([]byte, error) {
+	cmd := exec.Command(name, args...)
+	return cmd.CombinedOutput()
+}
+
+var gitHubClientProvider = getGHClient
+
 type config struct {
 	once               bool
 	containerList      string
@@ -108,8 +115,7 @@ func run(ctx context.Context, cfg *config) error {
 	sortReposByLastUpdated(repos)
 
 	// Get running devcontainers
-	cmd := exec.Command("devpod", "list")
-	out, err := cmd.Output()
+	out, err := commandRunner("devpod", "list")
 	if err != nil {
 		return fmt.Errorf("failed to list devcontainers: %w", err)
 	}
@@ -123,17 +129,17 @@ func run(ctx context.Context, cfg *config) error {
 	}
 
 	trackedSHAs := loadTrackedSHAs()
-	client, clientErr := getGHClient()
+	client, clientErr := gitHubClientProvider()
 	if clientErr != nil {
 		log.Printf("Warning: failed to get GitHub client: %v. Change detection will be bypassed.", clientErr)
 	}
 
 	for _, repo := range repos {
 		id := strings.ReplaceAll(repo, "/", "-")
+		log.Printf("DEBUG: repo is %s, client is nil? %v", repo, client == nil)
 		if !running[id] {
 			log.Printf("Starting devcontainer for %s", repo)
-			cmd := exec.Command("devpod", "up", fmt.Sprintf("https://github.com/%s", repo), "--id", id, "--detach")
-			out, err := cmd.CombinedOutput()
+			out, err := commandRunner("devpod", "up", fmt.Sprintf("https://github.com/%s", repo), "--id", id, "--detach")
 			if err != nil {
 				log.Printf("Failed to start devcontainer for %s: %v (output: %s)", repo, err, string(out))
 			} else {
@@ -151,26 +157,76 @@ func run(ctx context.Context, cfg *config) error {
 				compositeSHA, found, err := getRepoCompositeSHA(ctx, client, repo)
 				if err != nil {
 					log.Printf("Warning: failed to get composite SHA for %s: %v", repo, err)
-					continue
-				}
-				if !found {
-					continue
-				}
-
-				lastSeen, exists := trackedSHAs[repo]
-				if !exists {
-					log.Printf("Initial tracking established for %s at %s", repo, compositeSHA)
-					updateAndSaveRepoSHA(repo, compositeSHA, trackedSHAs)
-				} else if lastSeen != compositeSHA {
-					log.Printf("Detected devcontainer configuration/script change in %s! Recreating container...", repo)
-					log.Printf("Old tracking: %s", lastSeen)
-					log.Printf("New tracking: %s", compositeSHA)
-
-					err := recreateContainer(repo, id)
-					if err != nil {
-						log.Printf("Failed to recreate devcontainer for %s: %v", repo, err)
-					} else {
+				} else if found {
+					lastSeen, exists := trackedSHAs[repo]
+					if !exists {
+						log.Printf("Initial tracking established for %s at %s", repo, compositeSHA)
 						updateAndSaveRepoSHA(repo, compositeSHA, trackedSHAs)
+					} else if lastSeen != compositeSHA {
+						log.Printf("Detected devcontainer configuration/script change in %s! Recreating container...", repo)
+						log.Printf("Old tracking: %s", lastSeen)
+						log.Printf("New tracking: %s", compositeSHA)
+
+						err := recreateContainer(repo, id)
+						if err != nil {
+							log.Printf("Failed to recreate devcontainer for %s: %v", repo, err)
+						} else {
+							updateAndSaveRepoSHA(repo, compositeSHA, trackedSHAs)
+						}
+					}
+				}
+			}
+		}
+
+		// Issue-scanning and launching loop for per-issue devcontainers
+		if client != nil {
+			parts := strings.Split(repo, "/")
+			if len(parts) == 2 {
+				owner, repoName := parts[0], parts[1]
+				opts := &github.IssueListByRepoOptions{State: "open"}
+				issues, _, err := client.Issues.ListByRepo(ctx, owner, repoName, opts)
+				if err != nil {
+					log.Printf("Warning: failed to list issues for %s: %v", repo, err)
+				} else {
+					log.Printf("DEBUG: Successfully fetched %d issues for %s", len(issues), repo)
+					for _, issue := range issues {
+						hasSeraphineLabel := false
+						for _, label := range issue.Labels {
+							if strings.HasPrefix(label.GetName(), "seraphine") {
+								hasSeraphineLabel = true
+								break
+							}
+						}
+						if !hasSeraphineLabel {
+							continue
+						}
+
+						issueNumber := issue.GetNumber()
+						containerID := fmt.Sprintf("%s-issue-%d", id, issueNumber)
+						if !running[containerID] {
+							log.Printf("Discovered new issue #%d labeled 'seraphine' in %s. Provisioning container...", issueNumber, repo)
+							slug, err := deriveFeatureSlug(ctx, issue.GetTitle())
+							if err != nil {
+								log.Printf("Failed to derive branch slug for issue %d: %v", issueNumber, err)
+								continue
+							}
+
+							branchName := fmt.Sprintf("feature/%s_%d", slug, issueNumber)
+							err = ensureIssueBranchExists(ctx, client, owner, repoName, branchName)
+							if err != nil {
+								log.Printf("Failed to ensure issue branch %s exists: %v", branchName, err)
+								continue
+							}
+
+							repoURL := fmt.Sprintf("https://github.com/%s/%s@%s", owner, repoName, branchName)
+							log.Printf("Launching issue container %s on branch %s", containerID, branchName)
+							out, err := commandRunner("devpod", "up", repoURL, "--id", containerID, "--detach")
+							if err != nil {
+								log.Printf("Failed to launch devcontainer for issue %d: %v (output: %s)", issueNumber, err, string(out))
+							} else {
+								running[containerID] = true
+							}
+						}
 					}
 				}
 			}
