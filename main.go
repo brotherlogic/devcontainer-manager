@@ -144,7 +144,8 @@ func run(ctx context.Context, cfg *config) error {
 	}
 
 	for _, repo := range repos {
-		id := strings.ReplaceAll(repo, "/", "-")
+		parts := strings.Split(repo, "/")
+		id := parts[len(parts)-1]
 		log.Printf("DEBUG: repo is %s, client is nil? %v", repo, client == nil)
 		if !running[id] {
 			log.Printf("Starting devcontainer for %s", repo)
@@ -211,7 +212,7 @@ func run(ctx context.Context, cfg *config) error {
 						}
 
 						issueNumber := issue.GetNumber()
-						containerID := fmt.Sprintf("%s-issue-%d", id, issueNumber)
+						containerID := fmt.Sprintf("%s_%d", id, issueNumber)
 						if !running[containerID] {
 							log.Printf("Discovered new issue #%d labeled 'seraphine' in %s. Provisioning container...", issueNumber, repo)
 							slug, err := deriveFeatureSlug(ctx, issue.GetTitle())
@@ -246,7 +247,8 @@ func run(ctx context.Context, cfg *config) error {
 	if client != nil {
 		projectRepoMap := make(map[string]string)
 		for _, repo := range repos {
-			pID := strings.ReplaceAll(repo, "/", "-")
+			parts := strings.Split(repo, "/")
+			pID := parts[len(parts)-1]
 			projectRepoMap[pID] = repo
 		}
 
@@ -268,11 +270,11 @@ func run(ctx context.Context, cfg *config) error {
 			var runningIssues []issueContainer
 
 			for id, state := range containerStates {
-				if strings.Contains(id, "-issue-") && state == "Running" {
-					parts := strings.Split(id, "-issue-")
-					if len(parts) == 2 {
-						projectID := parts[0]
-						issueNumber, errNum := strconv.Atoi(parts[1])
+				if state == "Running" {
+					lastIdx := strings.LastIndex(id, "_")
+					if lastIdx != -1 {
+						projectID := id[:lastIdx]
+						issueNumber, errNum := strconv.Atoi(id[lastIdx+1:])
 						repo := projectRepoMap[projectID]
 						if errNum == nil && repo != "" {
 							partsRepo := strings.Split(repo, "/")
@@ -307,12 +309,11 @@ func run(ctx context.Context, cfg *config) error {
 
 			// 2. Cleanup Logic
 			for id := range containerStates {
-				if strings.Contains(id, "-issue-") {
-					parts := strings.Split(id, "-issue-")
-					if len(parts) == 2 {
-						projectID := parts[0]
-						issueNumber, errNum := strconv.Atoi(parts[1])
-						repo := projectRepoMap[projectID]
+				lastIdx := strings.LastIndex(id, "_")
+				if lastIdx != -1 {
+					projectID := id[:lastIdx]
+					issueNumber, errNum := strconv.Atoi(id[lastIdx+1:])
+					repo := projectRepoMap[projectID]
 						if errNum == nil && repo != "" {
 							partsRepo := strings.Split(repo, "/")
 							if len(partsRepo) == 2 {
@@ -356,7 +357,6 @@ func run(ctx context.Context, cfg *config) error {
 				}
 			}
 		}
-	}
 
 	return nil
 }
