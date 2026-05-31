@@ -52,16 +52,15 @@ func TestParseFlags_InvalidValue(t *testing.T) {
 }
 
 func TestDeriveFeatureSlug_Success(t *testing.T) {
-	originalRunAgyCommand := runAgyCommand
-	defer func() { runAgyCommand = originalRunAgyCommand }()
-
 	var capturedPrompt string
-	runAgyCommand = func(ctx context.Context, prompt string) ([]byte, error) {
-		capturedPrompt = prompt
-		return []byte("  Test_Mock_Slug! \n"), nil
+	sd := &slugDeriver{
+		runAgy: func(ctx context.Context, prompt string) ([]byte, error) {
+			capturedPrompt = prompt
+			return []byte("  Test_Mock_Slug! \n"), nil
+		},
 	}
 
-	slug, err := deriveFeatureSlug(context.Background(), "My Awesome Feature Title")
+	slug, err := sd.derive(context.Background(), "My Awesome Feature Title")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -78,14 +77,13 @@ func TestDeriveFeatureSlug_Success(t *testing.T) {
 }
 
 func TestDeriveFeatureSlug_DoubleUnderscores(t *testing.T) {
-	originalRunAgyCommand := runAgyCommand
-	defer func() { runAgyCommand = originalRunAgyCommand }()
-
-	runAgyCommand = func(ctx context.Context, prompt string) ([]byte, error) {
-		return []byte("  test__mock__slug \n"), nil
+	sd := &slugDeriver{
+		runAgy: func(ctx context.Context, prompt string) ([]byte, error) {
+			return []byte("  test__mock__slug \n"), nil
+		},
 	}
 
-	slug, err := deriveFeatureSlug(context.Background(), "Title")
+	slug, err := sd.derive(context.Background(), "Title")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -97,37 +95,37 @@ func TestDeriveFeatureSlug_DoubleUnderscores(t *testing.T) {
 }
 
 func TestDeriveFeatureSlug_InvalidWordCount(t *testing.T) {
-	originalRunAgyCommand := runAgyCommand
-	defer func() { runAgyCommand = originalRunAgyCommand }()
-
 	// Case 1: 2 words
-	runAgyCommand = func(ctx context.Context, prompt string) ([]byte, error) {
-		return []byte("too_short"), nil
+	sd1 := &slugDeriver{
+		runAgy: func(ctx context.Context, prompt string) ([]byte, error) {
+			return []byte("too_short"), nil
+		},
 	}
-	_, err := deriveFeatureSlug(context.Background(), "Title")
+	_, err := sd1.derive(context.Background(), "Title")
 	if err == nil {
 		t.Error("expected error for 2-word slug, got nil")
 	}
 
 	// Case 2: 4 words
-	runAgyCommand = func(ctx context.Context, prompt string) ([]byte, error) {
-		return []byte("this_is_too_long"), nil
+	sd2 := &slugDeriver{
+		runAgy: func(ctx context.Context, prompt string) ([]byte, error) {
+			return []byte("this_is_too_long"), nil
+		},
 	}
-	_, err = deriveFeatureSlug(context.Background(), "Title")
+	_, err = sd2.derive(context.Background(), "Title")
 	if err == nil {
 		t.Error("expected error for 4-word slug, got nil")
 	}
 }
 
 func TestDeriveFeatureSlug_Error(t *testing.T) {
-	originalRunAgyCommand := runAgyCommand
-	defer func() { runAgyCommand = originalRunAgyCommand }()
-
-	runAgyCommand = func(ctx context.Context, prompt string) ([]byte, error) {
-		return nil, fmt.Errorf("agy execution failed")
+	sd := &slugDeriver{
+		runAgy: func(ctx context.Context, prompt string) ([]byte, error) {
+			return nil, fmt.Errorf("agy execution failed")
+		},
 	}
 
-	_, err := deriveFeatureSlug(context.Background(), "Some title")
+	_, err := sd.derive(context.Background(), "Some title")
 	if err == nil {
 		t.Error("expected error from deriveFeatureSlug, got nil")
 	}

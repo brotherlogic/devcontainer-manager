@@ -622,14 +622,13 @@ func recreateContainer(repo string, id string) error {
 	return nil
 }
 
-var runAgyCommand = func(ctx context.Context, prompt string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "agy", "--prompt", prompt)
-	return cmd.Output()
+type slugDeriver struct {
+	runAgy func(ctx context.Context, prompt string) ([]byte, error)
 }
 
-func deriveFeatureSlug(ctx context.Context, title string) (string, error) {
+func (sd *slugDeriver) derive(ctx context.Context, title string) (string, error) {
 	prompt := fmt.Sprintf("Given the GitHub issue title: '%s', generate a 3-word slug summarizing the feature. Output exactly three lowercase words separated by underscores, with no other text, punctuation, or explanation.", title)
-	output, err := runAgyCommand(ctx, prompt)
+	output, err := sd.runAgy(ctx, prompt)
 	if err != nil {
 		return "", err
 	}
@@ -658,4 +657,15 @@ func deriveFeatureSlug(ctx context.Context, title string) (string, error) {
 	}
 
 	return strings.Join(words, "_"), nil
+}
+
+var defaultDeriver = &slugDeriver{
+	runAgy: func(ctx context.Context, prompt string) ([]byte, error) {
+		cmd := exec.CommandContext(ctx, "agy", "--prompt", prompt)
+		return cmd.Output()
+	},
+}
+
+func deriveFeatureSlug(ctx context.Context, title string) (string, error) {
+	return defaultDeriver.derive(ctx, title)
 }
