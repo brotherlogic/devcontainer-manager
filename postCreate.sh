@@ -1,16 +1,12 @@
-g#!/bin/zsh
+#!/bin/zsh
 
 export GOPATH=/go
 export PATH=$PATH:/usr/local/go/bin:$GOPATH/bin
 
 # Update and install dependencies
-sudo apt update && sudo apt install -y \
-    protobuf-compiler \
-    xdg-utils \
-    tmux \
-    emacs
+sudo apt update && sudo apt install -y protobuf-compiler xdg-utils tmux emacs
 
-go install google.golang.org/protobuf/cmd/protoc-gen-go@latest 
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 
 # Account for Ghostty
