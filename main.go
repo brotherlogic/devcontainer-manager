@@ -643,6 +643,19 @@ func deriveFeatureSlug(ctx context.Context, title string) (string, error) {
 			sb.WriteRune(r)
 		}
 	}
+	cleaned := sb.String()
 
-	return sb.String(), nil
+	parts := strings.Split(cleaned, "_")
+	var words []string
+	for _, part := range parts {
+		if part != "" {
+			words = append(words, part)
+		}
+	}
+
+	if len(words) != 3 {
+		return "", fmt.Errorf("derived slug %q is invalid: must have exactly 3 words, got %d", cleaned, len(words))
+	}
+
+	return strings.Join(words, "_"), nil
 }
