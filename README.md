@@ -49,6 +49,13 @@ The manager now prints the git SHA of the build on startup, allowing you to easi
 ## Container Prioritization
 The manager dynamically orders container startup operations, prioritizing repositories that have been most recently updated (pushed) on GitHub. This ensures the projects you are actively working on are spun up first.
 
+## Command-Line Flags
+
+The daemon supports the following command-line flags:
+* `-once`: Run the check loop once and then exit immediately (default: `false`).
+* `-container_list <file>`: The path to the container template file to check (default: `container.list.template`).
+* `-max_issue_containers <count>`: The maximum number of concurrent running issue containers (default: `5`).
+
 ## Hooray
 
 Hooray
