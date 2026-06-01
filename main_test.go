@@ -310,7 +310,7 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 	for _, cmd := range capturedCommands {
 		if cmd[0] == devpodExe && cmd[1] == "up" {
 			devpodUpCalled = true
-			expectedURL := "https://github.com/test-owner/test-repo@feature/mock_feature_slug_42"
+			expectedURL := "git@github.com:test-owner/test-repo@feature/mock_feature_slug_42"
 			if cmd[2] != expectedURL {
 				t.Errorf("expected URL %q, got %q", expectedURL, cmd[2])
 			}

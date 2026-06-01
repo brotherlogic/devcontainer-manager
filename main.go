@@ -149,7 +149,7 @@ func run(ctx context.Context, cfg *config) error {
 		log.Printf("DEBUG: repo is %s, client is nil? %v", repo, client == nil)
 		if !running[id] {
 			log.Printf("Starting devcontainer for %s", repo)
-			out, err := commandRunner(devpodExe, "up", fmt.Sprintf("https://github.com/%s", repo), "--id", id, "--ide", "none")
+			out, err := commandRunner(devpodExe, "up", fmt.Sprintf("git@github.com:%s", repo), "--id", id, "--ide", "none")
 			if err != nil {
 				log.Printf("Failed to start devcontainer for %s: %v (output: %s)", repo, err, string(out))
 			} else {
@@ -228,7 +228,7 @@ func run(ctx context.Context, cfg *config) error {
 								continue
 							}
 
-							repoURL := fmt.Sprintf("https://github.com/%s/%s@%s", owner, repoName, branchName)
+							repoURL := fmt.Sprintf("git@github.com:%s/%s@%s", owner, repoName, branchName)
 							log.Printf("Launching issue container %s on branch %s", containerID, branchName)
 							out, err := commandRunner(devpodExe, "up", repoURL, "--id", containerID, "--ide", "none")
 							if err != nil {
@@ -792,7 +792,7 @@ func recreateContainer(repo string, id string) error {
 	if err := deleteContainer(id); err != nil {
 		log.Printf("Warning: failed to delete container %s before recreating: %v", id, err)
 	}
-	cmd := exec.Command(devpodExe, "up", fmt.Sprintf("https://github.com/%s", repo), "--id", id, "--ide", "none")
+	cmd := exec.Command(devpodExe, "up", fmt.Sprintf("git@github.com:%s", repo), "--id", id, "--ide", "none")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s up failed: %w (output: %s)", devpodExe, err, string(out))
