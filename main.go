@@ -143,6 +143,7 @@ func run(ctx context.Context, cfg *config) error {
 		log.Printf("Warning: failed to get GitHub client: %v. Change detection will be bypassed.", clientErr)
 	}
 
+	validIssueContainers := make(map[string]bool)
 	for _, repo := range repos {
 		parts := strings.Split(repo, "/")
 		id := parts[len(parts)-1]
@@ -213,6 +214,7 @@ func run(ctx context.Context, cfg *config) error {
 
 						issueNumber := issue.GetNumber()
 						containerID := fmt.Sprintf("%s_%d", id, issueNumber)
+						validIssueContainers[containerID] = true
 						if !running[containerID] {
 							log.Printf("Discovered new issue #%d labeled 'seraphine' in %s. Provisioning container...", issueNumber, repo)
 							slug, err := deriveFeatureSlug(ctx, issue.GetTitle())
@@ -357,6 +359,47 @@ func run(ctx context.Context, cfg *config) error {
 				}
 			}
 		}
+
+	// 3. Extra Cleanup Logic for (a) not in template list (accounting for issues), and (b) use HTTP source
+	listOut, listErr := commandRunner(devpodExe, "list")
+	if listErr == nil {
+		validProjectNames := make(map[string]bool)
+		for _, r := range repos {
+			rParts := strings.Split(r, "/")
+			validProjectNames[rParts[len(rParts)-1]] = true
+		}
+
+		for _, line := range strings.Split(string(listOut), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "-") || strings.Contains(line, "NAME") {
+				continue
+			}
+			parts := strings.Split(line, "|")
+			if len(parts) >= 2 {
+				cName := strings.TrimSpace(parts[0])
+				cSource := strings.TrimSpace(parts[1])
+				if cName != "" {
+					// Check (b): Uses HTTP source
+					isHTTPSource := strings.Contains(cSource, "https://github.com/") || strings.Contains(cSource, "http://") || strings.Contains(cSource, "https://")
+
+					// Check (a): Not in the container list (accounting for issues)
+					inList := validProjectNames[cName] || validIssueContainers[cName]
+
+					if !inList || isHTTPSource {
+						log.Printf("Cleaning up container %s (inList: %v, isHTTPSource: %v)", cName, inList, isHTTPSource)
+						errStop := stopContainer(cName)
+						if errStop != nil {
+							log.Printf("Warning: failed to stop container %s during extra cleanup: %v", cName, errStop)
+						}
+						errDel := deleteContainer(cName)
+						if errDel != nil {
+							log.Printf("Warning: failed to delete container %s during extra cleanup: %v", cName, errDel)
+						}
+					}
+				}
+			}
+		}
+	}
 
 	return nil
 }
