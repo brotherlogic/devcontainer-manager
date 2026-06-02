@@ -66,7 +66,10 @@ var (
 	pollingTimeout  = 5 * time.Minute
 )
 
-const defaultIssueStartupCommand = `agy --prompt "Take a look at the status of this issue - if there's associated information in the ISSUE.md file, use that, otherwise just suggest a path forward for the issue. Do not undertake any implementation work"`
+const (
+	defaultIssueStartupCommand = `agy --prompt "Take a look at the status of this issue - if there's associated information in the ISSUE.md file, use that, otherwise just suggest a path forward for the issue. Do not undertake any implementation work"`
+	defaultBranchRef           = ""
+)
 
 type config struct {
 	once               bool
@@ -157,6 +160,7 @@ func run(ctx context.Context, cfg *config) error {
 	}
 
 	trackedSHAs := loadTrackedSHAs()
+	trackedSHAsChanged := false
 	client, clientErr := gitHubClientProvider()
 	if clientErr != nil {
 		log.Printf("Warning: failed to get GitHub client: %v. Change detection will be bypassed.", clientErr)
@@ -183,7 +187,7 @@ func run(ctx context.Context, cfg *config) error {
 					}(id)
 				}
 				if client != nil {
-					compositeSHA, found, err := getRepoCompositeSHA(ctx, client, repo, "")
+					compositeSHA, found, err := getRepoCompositeSHA(ctx, client, repo, defaultBranchRef)
 					if err == nil && found {
 						updateAndSaveRepoSHA(repo, compositeSHA, trackedSHAs)
 					} else if err != nil {
@@ -193,7 +197,7 @@ func run(ctx context.Context, cfg *config) error {
 			}
 		} else {
 			if client != nil {
-				compositeSHA, found, err := getRepoCompositeSHA(ctx, client, repo, "")
+				compositeSHA, found, err := getRepoCompositeSHA(ctx, client, repo, defaultBranchRef)
 				if err != nil {
 					log.Printf("Warning: failed to get composite SHA for %s: %v", repo, err)
 				} else if found {
@@ -426,11 +430,10 @@ func run(ctx context.Context, cfg *config) error {
 									_, errDelete := commandRunner(devpodExe, "delete", id)
 									if errDelete != nil {
 										log.Printf("Failed to delete container %s during cleanup: %v", id, errDelete)
-									}
-									if _, exists := trackedSHAs[id]; exists {
-										delete(trackedSHAs, id)
-										if errSave := saveTrackedSHAs(trackedSHAs); errSave != nil {
-											log.Printf("Warning: failed to save tracked SHAs: %v", errSave)
+									} else {
+										if _, exists := trackedSHAs[id]; exists {
+											delete(trackedSHAs, id)
+											trackedSHAsChanged = true
 										}
 									}
 								}
@@ -475,16 +478,21 @@ func run(ctx context.Context, cfg *config) error {
 						errDel := deleteContainer(cName)
 						if errDel != nil {
 							log.Printf("Warning: failed to delete container %s during extra cleanup: %v", cName, errDel)
-						}
-						if _, exists := trackedSHAs[cName]; exists {
-							delete(trackedSHAs, cName)
-							if errSave := saveTrackedSHAs(trackedSHAs); errSave != nil {
-								log.Printf("Warning: failed to save tracked SHAs: %v", errSave)
+						} else {
+							if _, exists := trackedSHAs[cName]; exists {
+								delete(trackedSHAs, cName)
+								trackedSHAsChanged = true
 							}
 						}
 					}
 				}
 			}
+		}
+	}
+
+	if trackedSHAsChanged {
+		if errSave := saveTrackedSHAs(trackedSHAs); errSave != nil {
+			log.Printf("Warning: failed to save tracked SHAs: %v", errSave)
 		}
 	}
 
