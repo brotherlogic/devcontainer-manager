@@ -66,6 +66,8 @@ var (
 	pollingTimeout  = 5 * time.Minute
 )
 
+const defaultIssueStartupCommand = `agy --prompt "Take a look at the status of this issue - if there's associated information in the ISSUE.md file, use that, otherwise just suggest a path forward for the issue. Do not undertake any implementation work"`
+
 type config struct {
 	once               bool
 	containerList      string
@@ -265,7 +267,7 @@ func run(ctx context.Context, cfg *config) error {
 								running[containerID] = true
 								cmdToInject := cfg.startupCommand
 								if cmdToInject == "" {
-									cmdToInject = `agy --prompt "Take a look at the status of this issue - if there's associated information in the ISSUE.md file, use that, otherwise just suggest a path forward for the issue. Do not undertake any implementation work"`
+									cmdToInject = defaultIssueStartupCommand
 								}
 								wg.Add(1)
 								go func(cid string) {
