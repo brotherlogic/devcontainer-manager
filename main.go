@@ -61,10 +61,16 @@ var commandRunner = func(name string, args ...string) ([]byte, error) {
 
 var gitHubClientProvider = getGHClient
 
+var (
+	pollingInterval = 5 * time.Second
+	pollingTimeout  = 5 * time.Minute
+)
+
 type config struct {
 	once               bool
 	containerList      string
 	maxIssueContainers int
+	startupCommand     string
 }
 
 func parseFlags(args []string) (*config, error) {
@@ -72,6 +78,7 @@ func parseFlags(args []string) (*config, error) {
 	once := fs.Bool("once", false, "Run once and exit")
 	containerList := fs.String("container_list", "container.list.template", "The list of containers to run")
 	maxIssueContainers := fs.Int("max_issue_containers", 5, "Maximum number of concurrent running issue containers")
+	startupCommand := fs.String("startup_command", "", "Command to inject into the container's tmux session on startup")
 
 	err := fs.Parse(args)
 	if err != nil {
@@ -82,6 +89,7 @@ func parseFlags(args []string) (*config, error) {
 		once:               *once,
 		containerList:      *containerList,
 		maxIssueContainers: *maxIssueContainers,
+		startupCommand:     *startupCommand,
 	}, nil
 }
 
@@ -107,6 +115,10 @@ func main() {
 }
 
 func run(ctx context.Context, cfg *config) error {
+	// wg is used to coordinate and wait for all concurrent background goroutines
+	// that handle the readiness-polling and startup-command injection for newly
+	// started or recreated devcontainers, preventing goroutine leaks before run() exits.
+	var wg sync.WaitGroup
 	data, err := os.ReadFile(cfg.containerList)
 	if err != nil {
 		return fmt.Errorf("failed to read container list: %w", err)
@@ -154,6 +166,13 @@ func run(ctx context.Context, cfg *config) error {
 			if err != nil {
 				log.Printf("Failed to start devcontainer for %s: %v (output: %s)", repo, err, string(out))
 			} else {
+				if cfg.startupCommand != "" {
+					wg.Add(1)
+					go func(cid string) {
+						defer wg.Done()
+						injectStartupCommand(ctx, cid, cfg.startupCommand)
+					}(id)
+				}
 				if client != nil {
 					compositeSHA, found, err := getRepoCompositeSHA(ctx, client, repo)
 					if err == nil && found {
@@ -178,7 +197,7 @@ func run(ctx context.Context, cfg *config) error {
 						log.Printf("Old tracking: %s", lastSeen)
 						log.Printf("New tracking: %s", compositeSHA)
 
-						err := recreateContainer(repo, id)
+						err := recreateContainer(ctx, repo, id, cfg.startupCommand, &wg)
 						if err != nil {
 							log.Printf("Failed to recreate devcontainer for %s: %v", repo, err)
 						} else {
@@ -237,6 +256,13 @@ func run(ctx context.Context, cfg *config) error {
 								log.Printf("Failed to launch devcontainer for issue %d: %v (output: %s)", issueNumber, err, string(out))
 							} else {
 								running[containerID] = true
+								if cfg.startupCommand != "" {
+									wg.Add(1)
+									go func(cid string) {
+										defer wg.Done()
+										injectStartupCommand(ctx, cid, cfg.startupCommand)
+									}(containerID)
+								}
 							}
 						}
 					}
@@ -401,6 +427,7 @@ func run(ctx context.Context, cfg *config) error {
 		}
 	}
 
+	wg.Wait()
 	return nil
 }
 
@@ -830,18 +857,64 @@ func getRepoCompositeSHA(ctx context.Context, client *github.Client, repo string
 	return strings.Join(partsSHA, "|"), true, nil
 }
 
-func recreateContainer(repo string, id string) error {
+func recreateContainer(ctx context.Context, repo string, id string, startupCmd string, wg *sync.WaitGroup) error {
 	log.Printf("Recreating devcontainer for %s...", repo)
 	if err := deleteContainer(id); err != nil {
 		log.Printf("Warning: failed to delete container %s before recreating: %v", id, err)
 	}
-	cmd := exec.Command(devpodExe, "up", fmt.Sprintf("git@github.com:%s", repo), "--id", id, "--ide", "none")
-	out, err := cmd.CombinedOutput()
+	out, err := commandRunner(devpodExe, "up", fmt.Sprintf("git@github.com:%s", repo), "--id", id, "--ide", "none")
 	if err != nil {
 		return fmt.Errorf("%s up failed: %w (output: %s)", devpodExe, err, string(out))
 	}
 	log.Printf("Successfully recreated devcontainer for %s", repo)
+	if startupCmd != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			injectStartupCommand(ctx, id, startupCmd)
+		}()
+	}
 	return nil
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+func injectStartupCommand(ctx context.Context, id string, startupCmd string) {
+	if startupCmd == "" {
+		return
+	}
+	log.Printf("Starting tmux readiness polling for container %s", id)
+
+	ticker := time.NewTicker(pollingInterval)
+	defer ticker.Stop()
+
+	timeout := time.After(pollingTimeout)
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("Context cancelled while waiting for container %s", id)
+			return
+		case <-timeout:
+			log.Printf("Timeout reached waiting for container %s tmux session to be ready", id)
+			return
+		case <-ticker.C:
+			out, err := commandRunner(devpodExe, "ssh", id, "--command", fmt.Sprintf("tmux has-session -t %s", id))
+			if err == nil {
+				log.Printf("Container %s tmux session is ready. Injecting startup command...", id)
+				injectOut, injectErr := commandRunner(devpodExe, "ssh", id, "--command", fmt.Sprintf("tmux send-keys -t %s %s C-m", id, shellQuote(startupCmd)))
+				if injectErr != nil {
+					log.Printf("Failed to inject startup command for %s: %v (output: %s)", id, injectErr, string(injectOut))
+				} else {
+					log.Printf("Successfully injected startup command for %s", id)
+				}
+				return
+			}
+			log.Printf("Polling container %s: tmux session not ready yet: %v (output: %s)", id, err, strings.TrimSpace(string(out)))
+		}
+	}
 }
 
 type slugDeriver struct {

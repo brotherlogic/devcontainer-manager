@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-github/v50/github"
 )
@@ -601,5 +603,210 @@ func TestRun_CleanupOfClosedOrUnlabeledContainers(t *testing.T) {
 	}
 	if !deleteCommandCalled {
 		t.Error("expected devpod delete to be called for closed issue 4 container during cleanup, but it was not")
+	}
+}
+
+func TestParseFlags_StartupCommand(t *testing.T) {
+	cfg, err := parseFlags([]string{"-startup_command", "echo 'hello'"})
+	if err != nil {
+		t.Fatalf("unexpected error parsing flags: %v", err)
+	}
+
+	if cfg.startupCommand != "echo 'hello'" {
+		t.Errorf("expected startupCommand to be 'echo \\'hello\\'', got %s", cfg.startupCommand)
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"hello", "'hello'"},
+		{"hello world", "'hello world'"},
+		{"hello 'world'", "'hello '\\''world'\\'''"},
+	}
+
+	for _, tc := range tests {
+		got := shellQuote(tc.input)
+		if got != tc.expected {
+			t.Errorf("shellQuote(%q) = %q, expected %q", tc.input, got, tc.expected)
+		}
+	}
+}
+
+func TestRun_InjectStartupCommand(t *testing.T) {
+	// Override polling times for test speed
+	oldInterval := pollingInterval
+	oldTimeout := pollingTimeout
+	pollingInterval = 1 * time.Millisecond
+	pollingTimeout = 100 * time.Millisecond
+	defer func() {
+		pollingInterval = oldInterval
+		pollingTimeout = oldTimeout
+	}()
+
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("test-owner/test-repo\n"); err != nil {
+		t.Fatalf("failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	// Mock commandRunner
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	var hasSessionAttempts int
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			// Container is not running initially
+			return []byte(""), nil
+		}
+		if name == devpodExe && len(args) >= 4 && args[0] == "ssh" && args[2] == "--command" {
+			cmdStr := args[3]
+			if strings.Contains(cmdStr, "has-session") {
+				hasSessionAttempts++
+				if hasSessionAttempts < 2 {
+					// Fail first attempt to test polling retry
+					return []byte("no session"), fmt.Errorf("session not ready")
+				}
+				// Succeed on second attempt
+				return []byte("session exists"), nil
+			}
+		}
+		return []byte("success"), nil
+	}
+
+	// Disable GitHub Client to bypass GH calls
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return nil, fmt.Errorf("no gh client in this test")
+	}
+
+	cfg := &config{
+		once:           true,
+		containerList:  tmpFile.Name(),
+		startupCommand: "echo 'hello'",
+	}
+
+	err = run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the captured commands
+	var foundUp bool
+	var foundHasSession bool
+	var foundSendKeys bool
+	for _, cmd := range capturedCommands {
+		if cmd[0] == devpodExe && cmd[1] == "up" {
+			foundUp = true
+		}
+		if cmd[0] == devpodExe && cmd[1] == "ssh" && cmd[2] == "test-repo" && cmd[3] == "--command" {
+			cmdStr := cmd[4]
+			if strings.Contains(cmdStr, "has-session") {
+				foundHasSession = true
+			}
+			if strings.Contains(cmdStr, "send-keys") {
+				foundSendKeys = true
+				expectedSendKeys := "tmux send-keys -t test-repo 'echo '\\''hello'\\''' C-m"
+				if cmdStr != expectedSendKeys {
+					t.Errorf("expected send-keys command %q, got %q", expectedSendKeys, cmdStr)
+				}
+			}
+		}
+	}
+
+	if !foundUp {
+		t.Error("expected devpod up to be called")
+	}
+	if !foundHasSession {
+		t.Error("expected tmux has-session to be polled")
+	}
+	if !foundSendKeys {
+		t.Error("expected tmux send-keys to be called")
+	}
+	if hasSessionAttempts < 2 {
+		t.Errorf("expected at least 2 attempts to check session, got %d", hasSessionAttempts)
+	}
+}
+
+func TestRun_InjectStartupCommandTimeout(t *testing.T) {
+	// Override polling times for test speed
+	oldInterval := pollingInterval
+	oldTimeout := pollingTimeout
+	pollingInterval = 1 * time.Millisecond
+	pollingTimeout = 10 * time.Millisecond
+	defer func() {
+		pollingInterval = oldInterval
+		pollingTimeout = oldTimeout
+	}()
+
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("test-owner/test-repo\n"); err != nil {
+		t.Fatalf("failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	// Mock commandRunner
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			// Container is not running initially
+			return []byte(""), nil
+		}
+		if name == devpodExe && len(args) >= 4 && args[0] == "ssh" && args[2] == "--command" {
+			cmdStr := args[3]
+			if strings.Contains(cmdStr, "has-session") {
+				// Always fail to force a timeout
+				return []byte("no session"), fmt.Errorf("session not ready")
+			}
+		}
+		return []byte("success"), nil
+	}
+
+	// Disable GitHub Client to bypass GH calls
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return nil, fmt.Errorf("no gh client in this test")
+	}
+
+	cfg := &config{
+		once:           true,
+		containerList:  tmpFile.Name(),
+		startupCommand: "echo 'hello'",
+	}
+
+	err = run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify that send-keys was NOT called
+	for _, cmd := range capturedCommands {
+		if cmd[0] == devpodExe && cmd[1] == "ssh" && cmd[2] == "test-repo" && cmd[3] == "--command" {
+			cmdStr := cmd[4]
+			if strings.Contains(cmdStr, "send-keys") {
+				t.Error("did not expect send-keys to be called when polling times out")
+			}
+		}
 	}
 }
