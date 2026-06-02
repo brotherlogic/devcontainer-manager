@@ -66,7 +66,8 @@ var (
 	pollingTimeout  = 5 * time.Minute
 )
 
-const defaultIssueStartupCommand = `agy --prompt "Take a look at the status of this issue - if there's associated information in the ISSUE.md file, use that, otherwise just suggest a path forward for the issue. Do not undertake any implementation work"`
+// We live dangerously
+const defaultIssueStartupCommand = `agy --prompt-interactive --dangerously-skip-permissions "Take a look at the status of this issue - if there's associated information in the ISSUE.md file, use that, otherwise just suggest a path forward for the issue. Do not undertake any implementation work"`
 
 type config struct {
 	once               bool
