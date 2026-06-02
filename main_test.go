@@ -242,6 +242,16 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 		return client, nil
 	}
 
+	// Override polling times for test speed
+	oldInterval := pollingInterval
+	oldTimeout := pollingTimeout
+	pollingInterval = 1 * time.Millisecond
+	pollingTimeout = 100 * time.Millisecond
+	defer func() {
+		pollingInterval = oldInterval
+		pollingTimeout = oldTimeout
+	}()
+
 	// Mock commandRunner
 	originalCommandRunner := commandRunner
 	defer func() { commandRunner = originalCommandRunner }()
@@ -309,6 +319,7 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 
 	// Verify that devpod up was called with the correct parameters
 	var devpodUpCalled bool
+	var foundSendKeys bool
 	for _, cmd := range capturedCommands {
 		if cmd[0] == devpodExe && cmd[1] == "up" {
 			devpodUpCalled = true
@@ -320,10 +331,19 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 				t.Errorf("expected --id test-repo_42, got %v", cmd[3:])
 			}
 		}
+		if cmd[0] == devpodExe && cmd[1] == "ssh" && cmd[2] == "test-repo_42" && cmd[3] == "--command" {
+			cmdStr := cmd[4]
+			if strings.Contains(cmdStr, "send-keys") && strings.Contains(cmdStr, "Take a look at the status of this issue") {
+				foundSendKeys = true
+			}
+		}
 	}
 
 	if !devpodUpCalled {
 		t.Error("expected devpod up command to be called for issue 42, but it was not")
+	}
+	if !foundSendKeys {
+		t.Error("expected default issue startup command to be injected, but it was not")
 	}
 }
 
