@@ -66,6 +66,8 @@ var (
 	pollingTimeout  = 5 * time.Minute
 )
 
+const defaultIssueStartupCommand = `agy --prompt "Take a look at the status of this issue - if there's associated information in the ISSUE.md file, use that, otherwise just suggest a path forward for the issue. Do not undertake any implementation work"`
+
 type config struct {
 	once               bool
 	containerList      string
@@ -85,11 +87,16 @@ func parseFlags(args []string) (*config, error) {
 		return nil, err
 	}
 
+	var startupCmdVal string
+	if startupCommand != nil {
+		startupCmdVal = *startupCommand
+	}
+
 	return &config{
 		once:               *once,
 		containerList:      *containerList,
 		maxIssueContainers: *maxIssueContainers,
-		startupCommand:     *startupCommand,
+		startupCommand:     startupCmdVal,
 	}, nil
 }
 
@@ -170,7 +177,9 @@ func run(ctx context.Context, cfg *config) error {
 					wg.Add(1)
 					go func(cid string) {
 						defer wg.Done()
-						injectStartupCommand(ctx, cid, cfg.startupCommand)
+						if err := injectStartupCommand(ctx, cid, cfg.startupCommand); err != nil {
+							log.Printf("ERROR: Failed to inject startup command for container %s: %v", cid, err)
+						}
 					}(id)
 				}
 				if client != nil {
@@ -258,12 +267,14 @@ func run(ctx context.Context, cfg *config) error {
 								running[containerID] = true
 								cmdToInject := cfg.startupCommand
 								if cmdToInject == "" {
-									cmdToInject = `agy --prompt "Take a look at the status of this issue - if there's associated information in the ISSUE.md file, use that, otherwise just suggest a path forward for the issue. Do not undertake any implementation work"`
+									cmdToInject = defaultIssueStartupCommand
 								}
 								wg.Add(1)
 								go func(cid string) {
 									defer wg.Done()
-									injectStartupCommand(ctx, cid, cmdToInject)
+									if err := injectStartupCommand(ctx, cid, cmdToInject); err != nil {
+										log.Printf("ERROR: Failed to inject startup command for container %s: %v", cid, err)
+									}
 								}(containerID)
 							}
 						}
@@ -873,7 +884,9 @@ func recreateContainer(ctx context.Context, repo string, id string, startupCmd s
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			injectStartupCommand(ctx, id, startupCmd)
+			if err := injectStartupCommand(ctx, id, startupCmd); err != nil {
+				log.Printf("ERROR: Failed to inject startup command for container %s: %v", id, err)
+			}
 		}()
 	}
 	return nil
@@ -883,9 +896,9 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
-func injectStartupCommand(ctx context.Context, id string, startupCmd string) {
+func injectStartupCommand(ctx context.Context, id string, startupCmd string) error {
 	if startupCmd == "" {
-		return
+		return nil
 	}
 	log.Printf("Starting tmux readiness polling for container %s", id)
 
@@ -898,10 +911,10 @@ func injectStartupCommand(ctx context.Context, id string, startupCmd string) {
 		select {
 		case <-ctx.Done():
 			log.Printf("Context cancelled while waiting for container %s", id)
-			return
+			return fmt.Errorf("context cancelled while waiting for container %s", id)
 		case <-timeout:
 			log.Printf("Timeout reached waiting for container %s tmux session to be ready", id)
-			return
+			return fmt.Errorf("timeout reached waiting for container %s tmux session to be ready", id)
 		case <-ticker.C:
 			out, err := commandRunner(devpodExe, "ssh", id, "--command", fmt.Sprintf("tmux has-session -t %s", id))
 			if err == nil {
@@ -909,10 +922,10 @@ func injectStartupCommand(ctx context.Context, id string, startupCmd string) {
 				injectOut, injectErr := commandRunner(devpodExe, "ssh", id, "--command", fmt.Sprintf("tmux send-keys -t %s %s C-m", id, shellQuote(startupCmd)))
 				if injectErr != nil {
 					log.Printf("Failed to inject startup command for %s: %v (output: %s)", id, injectErr, string(injectOut))
-				} else {
-					log.Printf("Successfully injected startup command for %s", id)
+					return fmt.Errorf("failed to inject startup command: %w (output: %s)", injectErr, string(injectOut))
 				}
-				return
+				log.Printf("Successfully injected startup command for %s", id)
+				return nil
 			}
 			log.Printf("Polling container %s: tmux session not ready yet: %v (output: %s)", id, err, strings.TrimSpace(string(out)))
 		}
