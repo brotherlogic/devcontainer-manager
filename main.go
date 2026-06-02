@@ -256,13 +256,15 @@ func run(ctx context.Context, cfg *config) error {
 								log.Printf("Failed to launch devcontainer for issue %d: %v (output: %s)", issueNumber, err, string(out))
 							} else {
 								running[containerID] = true
-								if cfg.startupCommand != "" {
-									wg.Add(1)
-									go func(cid string) {
-										defer wg.Done()
-										injectStartupCommand(ctx, cid, cfg.startupCommand)
-									}(containerID)
+								cmdToInject := cfg.startupCommand
+								if cmdToInject == "" {
+									cmdToInject = `agy --prompt "Take a look at the status of this issue - if there's associated information in the ISSUE.md file, use that, otherwise just suggest a path forward for the issue. Do not undertake any implementation work"`
 								}
+								wg.Add(1)
+								go func(cid string) {
+									defer wg.Done()
+									injectStartupCommand(ctx, cid, cmdToInject)
+								}(containerID)
 							}
 						}
 					}
