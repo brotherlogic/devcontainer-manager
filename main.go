@@ -241,7 +241,7 @@ func run(ctx context.Context, cfg *config) error {
 						}
 
 						issueNumber := issue.GetNumber()
-						containerID := fmt.Sprintf("%s_%d", id, issueNumber)
+						containerID := fmt.Sprintf("%s-%d", id, issueNumber)
 						validIssueContainers[containerID] = true
 						if !running[containerID] {
 							log.Printf("Discovered new issue #%d labeled 'seraphine' in %s. Provisioning container...", issueNumber, repo)
@@ -312,7 +312,7 @@ func run(ctx context.Context, cfg *config) error {
 
 			for id, state := range containerStates {
 				if state == "Running" {
-					lastIdx := strings.LastIndex(id, "_")
+					lastIdx := strings.LastIndex(id, "-")
 					if lastIdx != -1 {
 						projectID := id[:lastIdx]
 						issueNumber, errNum := strconv.Atoi(id[lastIdx+1:])
@@ -350,7 +350,7 @@ func run(ctx context.Context, cfg *config) error {
 
 			// 2. Cleanup Logic
 			for id := range containerStates {
-				lastIdx := strings.LastIndex(id, "_")
+				lastIdx := strings.LastIndex(id, "-")
 				if lastIdx != -1 {
 					projectID := id[:lastIdx]
 					issueNumber, errNum := strconv.Atoi(id[lastIdx+1:])
@@ -917,9 +917,30 @@ func injectStartupCommand(ctx context.Context, id string, startupCmd string) err
 			return fmt.Errorf("timeout reached waiting for container %s tmux session to be ready", id)
 		case <-ticker.C:
 			out, err := commandRunner(devpodExe, "ssh", id, "--command", fmt.Sprintf("tmux has-session -t %s", id))
+			sessionName := id
+			if err != nil {
+				// Fallback to base name if it is an issue container
+				lastIdx := strings.LastIndex(id, "-")
+				if lastIdx != -1 {
+					if _, errNum := strconv.Atoi(id[lastIdx+1:]); errNum == nil {
+						baseID := id[:lastIdx]
+						// If the project ID is devcontainer-manager, the tmux session is named "dcm"
+						if baseID == "devcontainer-manager" {
+							baseID = "dcm"
+						}
+						fallbackOut, fallbackErr := commandRunner(devpodExe, "ssh", id, "--command", fmt.Sprintf("tmux has-session -t %s", baseID))
+						if fallbackErr == nil {
+							err = nil
+							sessionName = baseID
+							out = fallbackOut
+						}
+					}
+				}
+			}
+
 			if err == nil {
-				log.Printf("Container %s tmux session is ready. Injecting startup command...", id)
-				injectOut, injectErr := commandRunner(devpodExe, "ssh", id, "--command", fmt.Sprintf("tmux send-keys -t %s %s C-m", id, shellQuote(startupCmd)))
+				log.Printf("Container %s tmux session %q is ready. Injecting startup command...", id, sessionName)
+				injectOut, injectErr := commandRunner(devpodExe, "ssh", id, "--command", fmt.Sprintf("tmux send-keys -t %s %s C-m", sessionName, shellQuote(startupCmd)))
 				if injectErr != nil {
 					log.Printf("Failed to inject startup command for %s: %v (output: %s)", id, injectErr, string(injectOut))
 					return fmt.Errorf("failed to inject startup command: %w (output: %s)", injectErr, string(injectOut))
