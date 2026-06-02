@@ -115,6 +115,9 @@ func main() {
 }
 
 func run(ctx context.Context, cfg *config) error {
+	// wg is used to coordinate and wait for all concurrent background goroutines
+	// that handle the readiness-polling and startup-command injection for newly
+	// started or recreated devcontainers, preventing goroutine leaks before run() exits.
 	var wg sync.WaitGroup
 	data, err := os.ReadFile(cfg.containerList)
 	if err != nil {
