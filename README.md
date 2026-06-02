@@ -7,9 +7,9 @@ The manager periodically checks GitHub for updates. If it detects changes in the
 cli installed for managing devcontainers and running them. Project is written in golang, using the latest standards.
 
 ## Configuration Tracking & Caching
-The daemon automatically tracks GitHub commits of the `.devcontainer` configuration files to seamlessly restart existing devpod containers without unnecessarily rebuilding them.
+The daemon automatically tracks GitHub commits and content changes of the `.devcontainer` configuration files (`devcontainer.json` or `.devcontainer/devcontainer.json`), as well as any lifecycle scripts referenced inside them (such as `postCreateCommand`, `postStartCommand`, etc.). This ensures existing devpod containers seamlessly restart and rebuild when configurations or their dependencies update, without unnecessary rebuilding.
 
-Configurations are actively tracked via a state file (`~/.config/devcontainer-manager/tracked_shas.json`). To force a hard container rebuild, simply delete this JSON file to bypass the state. Rebuilds are otherwise automatic whenever remote repository devcontainer files are updated.
+Configurations are actively tracked via a state file (`~/.config/devcontainer-manager/tracked_shas.json`) containing deterministic, composite SHAs of all tracked files. To force a hard container rebuild, simply delete this JSON file to bypass the state. Rebuilds are otherwise automatic whenever remote repository devcontainer configuration files or referenced script files are updated.
 
 ## Installation
 
@@ -48,6 +48,17 @@ The manager now prints the git SHA of the build on startup, allowing you to easi
 
 ## Container Prioritization
 The manager dynamically orders container startup operations, prioritizing repositories that have been most recently updated (pushed) on GitHub. This ensures the projects you are actively working on are spun up first.
+
+## Dynamic Startup Commands
+The manager supports dynamically injecting a startup command or prompt into the container once it starts up or is recreated. When the `-startup_command "<command>"` flag is provided, the manager will poll the container via SSH until a `tmux` session named exactly after the container ID is ready. Once ready, the command will be sent directly to that tmux session, running it dynamically inside the persistent tmux shell.
+
+## Command-Line Flags
+
+The daemon supports the following command-line flags:
+* `-once`: Run the check loop once and then exit immediately (default: `false`).
+* `-container_list <file>`: The path to the container template file to check (default: `container.list.template`).
+* `-max_issue_containers <count>`: The maximum number of concurrent running issue containers (default: `5`).
+* `-startup_command <command>`: A command/prompt to inject dynamically into the container's active tmux session once it is ready (default: `""`).
 
 ## Hooray
 
