@@ -7,7 +7,7 @@ The manager periodically checks GitHub for updates. If it detects changes in the
 cli installed for managing devcontainers and running them. Project is written in golang, using the latest standards.
 
 ## Configuration Tracking & Caching
-The daemon automatically tracks GitHub commits and content changes of the `.devcontainer` configuration files (`devcontainer.json` or `.devcontainer/devcontainer.json`), as well as any lifecycle scripts referenced inside them (such as `postCreateCommand`, `postStartCommand`, etc.). This ensures existing devpod containers seamlessly restart and rebuild when configurations or their dependencies update, without unnecessary rebuilding.
+The daemon automatically tracks GitHub commits and content changes of the `.devcontainer` configuration files (`devcontainer.json` or `.devcontainer/devcontainer.json`), as well as any lifecycle scripts referenced inside them (such as `postCreateCommand`, `postStartCommand`, etc.). This tracking applies to both standard/non-issue containers and per-issue branch devcontainers (checking the configuration on their respective feature branches). This ensures existing devpod containers seamlessly restart and rebuild when configurations or their dependencies update, without unnecessary rebuilding.
 
 Configurations are actively tracked via a state file (`~/.config/devcontainer-manager/tracked_shas.json`) containing deterministic, composite SHAs of all tracked files. To force a hard container rebuild, simply delete this JSON file to bypass the state. Rebuilds are otherwise automatic whenever remote repository devcontainer configuration files or referenced script files are updated.
 
