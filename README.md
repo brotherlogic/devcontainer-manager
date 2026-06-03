@@ -48,6 +48,13 @@ The manager now prints the git SHA of the build on startup, allowing you to easi
 
 ## Container Prioritization
 The manager dynamically orders container startup operations, prioritizing repositories that have been most recently updated (pushed) on GitHub. This ensures the projects you are actively working on are spun up first.
+## Issue-Based Devcontainers & Label Tracking
+The daemon supports automatically provisioning dedicated devcontainers for open issues labeled with `seraphine` (or prefixes thereof). When it provisions these containers, it updates the GitHub issue labels to track their state:
+- `container-creating`: Added when container provisioning begins.
+- `container-ready`: Added when the container is successfully launched and ready (with `container-creating` and `container-failed` labels removed).
+- `container-failed`: Added if provisioning fails (with `container-creating` and `container-ready` labels removed).
+
+When a container is hibernated due to hitting concurrent container limits, the labels are kept as-is. Similarly, when a container is cleaned up or deleted, the labels are left on the issue for historical record.
 
 ## Dynamic Startup Commands
 The manager supports dynamically injecting a startup command or prompt into the container once it starts up or is recreated. When the `-startup_command "<command>"` flag is provided, the manager will poll the container via SSH until a `tmux` session named exactly after the container ID is ready. Once ready, the command will be sent directly to that tmux session, running it dynamically inside the persistent tmux shell.

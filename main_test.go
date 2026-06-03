@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -288,6 +289,43 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 		]`)
 	})
 
+	var currentLabels = map[string]bool{
+		"seraphine-feature": true,
+	}
+	var labelUpdates []string
+	var labelDeletes []string
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/", func(w http.ResponseWriter, r *http.Request) {
+		t.Logf("Mock GitHub API (subtree): %s %s called", r.Method, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			var labelsJSON []string
+			for l := range currentLabels {
+				labelsJSON = append(labelsJSON, fmt.Sprintf(`{"name": "%s"}`, l))
+			}
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"number": 42, "title": "My Awesome Feature", "labels": [%s]}`, strings.Join(labelsJSON, ","))
+		} else if r.Method == http.MethodPost {
+			var labels []string
+			if err := json.NewDecoder(r.Body).Decode(&labels); err == nil {
+				for _, l := range labels {
+					currentLabels[l] = true
+					labelUpdates = append(labelUpdates, l)
+				}
+			}
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `[]`)
+		} else if r.Method == http.MethodDelete {
+			parts := strings.Split(r.URL.Path, "/")
+			if len(parts) > 0 {
+				label := parts[len(parts)-1]
+				delete(currentLabels, label)
+				labelDeletes = append(labelDeletes, label)
+			}
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `[]`)
+		}
+	})
+
 	// 2. Fetching target branch (returns 200 OK so ensureIssueBranchExists passes immediately)
 	mux.HandleFunc("/repos/test-owner/test-repo/git/ref/heads/feature/mock_feature_slug_42", func(w http.ResponseWriter, r *http.Request) {
 		t.Logf("Mock GitHub API: GET /repos/test-owner/test-repo/git/ref/heads/feature/mock_feature_slug_42 called")
@@ -344,6 +382,33 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 	}
 	if !foundSendKeys {
 		t.Error("expected default issue startup command to be injected, but it was not")
+	}
+
+	// Verify label transitions
+	var foundCreatingUpdate, foundReadyUpdate bool
+	for _, l := range labelUpdates {
+		if l == "container-creating" {
+			foundCreatingUpdate = true
+		}
+		if l == "container-ready" {
+			foundReadyUpdate = true
+		}
+	}
+	if !foundCreatingUpdate {
+		t.Errorf("expected 'container-creating' label to be added, but updates were: %v", labelUpdates)
+	}
+	if !foundReadyUpdate {
+		t.Errorf("expected 'container-ready' label to be added, but updates were: %v", labelUpdates)
+	}
+
+	var foundCreatingDelete bool
+	for _, l := range labelDeletes {
+		if l == "container-creating" {
+			foundCreatingDelete = true
+		}
+	}
+	if !foundCreatingDelete {
+		t.Errorf("expected 'container-creating' label to be deleted during ready transition, but deletes were: %v", labelDeletes)
 	}
 }
 
@@ -828,5 +893,158 @@ func TestRun_InjectStartupCommandTimeout(t *testing.T) {
 				t.Error("did not expect send-keys to be called when polling times out")
 			}
 		}
+	}
+}
+
+func TestRun_ScanAndLaunchIssueContainer_Failure(t *testing.T) {
+	// Create a temporary container list file
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("test-owner/test-repo\n"); err != nil {
+		t.Fatalf("failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	// Mock HTTP server
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	// Inject getGitHubClient provider
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+
+	// Mock commandRunner - make devpod up fail
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			return []byte("test-repo Running\n"), nil
+		}
+		if name == devpodExe && len(args) > 0 && args[0] == "up" {
+			return []byte("failed to start container"), fmt.Errorf("up failed")
+		}
+		return []byte("success"), nil
+	}
+
+	// Mock agy command slug derivation
+	originalDeriverRunAgy := defaultDeriver.runAgy
+	defer func() { defaultDeriver.runAgy = originalDeriverRunAgy }()
+	defaultDeriver.runAgy = func(ctx context.Context, prompt string) ([]byte, error) {
+		return []byte("mock_feature_slug"), nil
+	}
+
+	// Setup GitHub API mock responses
+	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `[
+			{
+				"number": 42,
+				"title": "My Awesome Feature",
+				"labels": [{"name": "seraphine-feature"}]
+			}
+		]`)
+	})
+
+	var currentLabels = map[string]bool{
+		"seraphine-feature": true,
+	}
+	var labelUpdates []string
+	var labelDeletes []string
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			var labelsJSON []string
+			for l := range currentLabels {
+				labelsJSON = append(labelsJSON, fmt.Sprintf(`{"name": "%s"}`, l))
+			}
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"number": 42, "title": "My Awesome Feature", "labels": [%s]}`, strings.Join(labelsJSON, ","))
+		} else if r.Method == http.MethodPost {
+			var labels []string
+			if err := json.NewDecoder(r.Body).Decode(&labels); err == nil {
+				for _, l := range labels {
+					currentLabels[l] = true
+					labelUpdates = append(labelUpdates, l)
+				}
+			}
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `[]`)
+		} else if r.Method == http.MethodDelete {
+			parts := strings.Split(r.URL.Path, "/")
+			if len(parts) > 0 {
+				label := parts[len(parts)-1]
+				delete(currentLabels, label)
+				labelDeletes = append(labelDeletes, label)
+			}
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `[]`)
+		}
+	})
+
+	mux.HandleFunc("/repos/test-owner/test-repo/git/ref/heads/feature/mock_feature_slug_42", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"ref": "refs/heads/feature/mock_feature_slug_42", "object": {"sha": "latest_sha"}}`)
+	})
+
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	cfg := &config{
+		once:               true,
+		containerList:      tmpFile.Name(),
+		maxIssueContainers: 5,
+	}
+
+	err = run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify label transitions
+	var foundCreatingUpdate, foundFailedUpdate bool
+	for _, l := range labelUpdates {
+		if l == "container-creating" {
+			foundCreatingUpdate = true
+		}
+		if l == "container-failed" {
+			foundFailedUpdate = true
+		}
+	}
+	if !foundCreatingUpdate {
+		t.Errorf("expected 'container-creating' label update, got %v", labelUpdates)
+	}
+	if !foundFailedUpdate {
+		t.Errorf("expected 'container-failed' label update, got %v", labelUpdates)
+	}
+
+	// Check if container-creating was deleted
+	var foundCreatingDelete bool
+	for _, l := range labelDeletes {
+		if l == "container-creating" {
+			foundCreatingDelete = true
+		}
+	}
+	if !foundCreatingDelete {
+		t.Errorf("expected 'container-creating' label to be deleted on failure transition, got %v", labelDeletes)
 	}
 }
