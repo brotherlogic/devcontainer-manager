@@ -1,4 +1,6 @@
 package main
+// Trigger PR review
+
 
 import (
 	"context"
@@ -68,7 +70,7 @@ var (
 
 // We live dangerously
 const (
-	defaultIssueStartupCommand = `agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of this issue - if there's associated information in the ISSUE.md file, use that, otherwise just suggest a path forward for the issue. Do not undertake any implementation work"`
+	defaultIssueStartupCommand = `agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of this issue - if there's associated information in the ISSUES.md file, follow those instructions. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`
 	defaultBranchRef           = ""
 	DevpodLabelPrefix          = "sh.loft.devpod.workspace.id="
 	VscLabelPrefix             = "dev.containers.id="
@@ -259,6 +261,7 @@ func run(ctx context.Context, cfg *config) error {
 							if err != nil {
 								log.Printf("Failed to derive branch slug for issue %d: %v", issueNumber, err)
 								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
+								go reportStartupFailure(ctx, client, owner, repoName, "", issueNumber, err, "")
 								continue
 							}
 
@@ -267,6 +270,7 @@ func run(ctx context.Context, cfg *config) error {
 							if err != nil {
 								log.Printf("Failed to ensure issue branch %s exists: %v", branchName, err)
 								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
+								go reportStartupFailure(ctx, client, owner, repoName, branchName, issueNumber, err, "")
 								continue
 							}
 
@@ -276,6 +280,7 @@ func run(ctx context.Context, cfg *config) error {
 							if err != nil {
 								log.Printf("Failed to launch devcontainer for issue %d: %v (output: %s)", issueNumber, err, string(out))
 								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
+								go reportStartupFailure(ctx, client, owner, repoName, branchName, issueNumber, err, string(out))
 							} else {
 								running[containerID] = true
 								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-ready", []string{"container-creating", "container-failed"})
@@ -323,6 +328,7 @@ func run(ctx context.Context, cfg *config) error {
 									err := recreateIssueContainer(ctx, owner, repoName, branchName, containerID, cfg.startupCommand, &wg)
 									if err != nil {
 										log.Printf("Failed to recreate devcontainer for issue %d: %v", issueNumber, err)
+										go reportStartupFailure(ctx, client, owner, repoName, branchName, issueNumber, err, "")
 									} else {
 										updateAndSaveRepoSHA(containerID, compositeSHA, trackedSHAs)
 									}
@@ -1292,4 +1298,53 @@ func renameDockerContainer(containerID string) {
 }
 
 // No-op change to trigger CI for issue 98
+
+func reportStartupFailure(ctx context.Context, client *github.Client, owner, repo, branch string, originalIssueNum int, startupErr error, outputLog string) {
+	if client == nil {
+		return
+	}
+
+	opts := &github.IssueListByRepoOptions{
+		State: "open",
+	}
+	issues, _, err := client.Issues.ListByRepo(ctx, owner, repo, opts)
+	if err != nil {
+		log.Printf("Warning: failed to list issues for %s/%s during startup failure reporting: %v", owner, repo, err)
+		return
+	}
+
+	for _, issue := range issues {
+		if issue.GetTitle() == "Issue Container Startup Failed" {
+			log.Printf("An open issue 'Issue Container Startup Failed' already exists in %s/%s. Skipping creation.", owner, repo)
+			return
+		}
+	}
+
+	var bodyBuilder strings.Builder
+	bodyBuilder.WriteString("### Devcontainer Startup Failure Report\n\n")
+	bodyBuilder.WriteString(fmt.Sprintf("* **Branch:** `%s`\n", branch))
+	bodyBuilder.WriteString(fmt.Sprintf("* **Original Issue:** #%d\n\n", originalIssueNum))
+	bodyBuilder.WriteString("#### Startup Log / Error Message\n")
+	bodyBuilder.WriteString("```\n")
+	if startupErr != nil {
+		bodyBuilder.WriteString(fmt.Sprintf("Error: %v\n", startupErr))
+	}
+	if outputLog != "" {
+		bodyBuilder.WriteString(outputLog)
+		bodyBuilder.WriteString("\n")
+	}
+	bodyBuilder.WriteString("```\n")
+
+	req := &github.IssueRequest{
+		Title:  github.String("Issue Container Startup Failed"),
+		Body:   github.String(bodyBuilder.String()),
+		Labels: &[]string{"seraphine-bug"},
+	}
+
+	_, _, err = client.Issues.Create(ctx, owner, repo, req)
+	if err != nil {
+		log.Printf("Warning: failed to create startup failure issue in %s/%s: %v", owner, repo, err)
+	}
+}
+
 

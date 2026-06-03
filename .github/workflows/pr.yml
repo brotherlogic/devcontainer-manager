@@ -16,13 +16,32 @@ jobs:
       - name: Create Pull Request
         env:
           GITHUB_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
           # Check if PR already exists for this branch
           PR_EXISTS=$(gh pr list --head "${{ github.ref_name }}" --state open --json number --jq length)
           if [ "$PR_EXISTS" -eq 0 ]; then
+            # Extract first line for the title, fallback to branch name if empty
+            PR_TITLE=$(echo "$COMMIT_MSG" | head -n 1)
+            if [ -z "$PR_TITLE" ]; then
+              PR_TITLE="Auto PR: ${{ github.ref_name }}"
+            else
+              PR_TITLE="Auto PR: $PR_TITLE"
+            fi
+            
+            # Use full message for the body, fallback to default message if empty
+            PR_BODY="$COMMIT_MSG"
+            if [ -z "$PR_BODY" ]; then
+              PR_BODY="Automated PR created from branch ${{ github.ref_name }}"
+            fi
+
+            # Export to environment variables to ensure safe parameter passing
+            export PR_TITLE
+            export PR_BODY
+
             gh pr create \
-              --title "Auto PR: ${{ github.ref_name }}" \
-              --body "Automated PR created from branch ${{ github.ref_name }}" \
+              --title "$PR_TITLE" \
+              --body "$PR_BODY" \
               --base main \
               --head "${{ github.ref_name }}"
           else
