@@ -119,6 +119,8 @@ Seraphine posts the finalized implementation plan to the sub-issue using premium
      - **Sub-Issue Title:** `[Breakdown] <Parent Issue Title>`
      - **Sub-Issue Label:** `seraphine-break-down-issue`
      - **Sub-Issue Description:** A link referencing the `[Implementation Plan]` issue and instructing the agent to begin the issue breakdown.
+  3. **Stop Execution:** Once the breakdown sub-issue has been created, the agent must stop and await further instructions (do not automatically begin breaking down the issue).
+
 
 ---
 
