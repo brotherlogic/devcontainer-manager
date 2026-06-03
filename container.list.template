@@ -1,7 +1,6 @@
 # List of devcontainers to be managed and synced
 brotherlogic/bartwarn
 brotherlogic/beerkellar
-brotherlogic/buildserver
 brotherlogic/cooking
 brotherlogic/dcrouter
 brotherlogic/devcontainer-manager
@@ -9,19 +8,14 @@ brotherlogic/eurorack
 brotherlogic/focus
 brotherlogic/gemclust
 brotherlogic/ghwebhook
-brotherlogic/godiscogs
 brotherlogic/gramophile
-brotherlogic/kubebrainz
 brotherlogic/life
 brotherlogic/music
 brotherlogic/notes
-brotherlogic/pgstore
 brotherlogic/prod
 brotherlogic/recordgetter
 brotherlogic/recordcollection
-brotherlogic/recordcleaner
 brotherlogic/recorder
 brotherlogic/roofing
 brotherlogic/seraphine
 brotherlogic/style
-brotherlogic/tasks

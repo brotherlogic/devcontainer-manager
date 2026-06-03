@@ -7,9 +7,9 @@ The manager periodically checks GitHub for updates. If it detects changes in the
 cli installed for managing devcontainers and running them. Project is written in golang, using the latest standards.
 
 ## Configuration Tracking & Caching
-The daemon automatically tracks GitHub commits of the `.devcontainer` configuration files to seamlessly restart existing devpod containers without unnecessarily rebuilding them.
+The daemon automatically tracks GitHub commits and content changes of the `.devcontainer` configuration files (`devcontainer.json` or `.devcontainer/devcontainer.json`), as well as any lifecycle scripts referenced inside them (such as `postCreateCommand`, `postStartCommand`, etc.). This tracking applies to both standard/non-issue containers and per-issue branch devcontainers (checking the configuration on their respective feature branches). This ensures existing devpod containers seamlessly restart and rebuild when configurations or their dependencies update, without unnecessary rebuilding.
 
-Configurations are actively tracked via a state file (`~/.config/devcontainer-manager/tracked_shas.json`). To force a hard container rebuild, simply delete this JSON file to bypass the state. Rebuilds are otherwise automatic whenever remote repository devcontainer files are updated.
+Configurations are actively tracked via a state file (`~/.config/devcontainer-manager/tracked_shas.json`) containing deterministic, composite SHAs of all tracked files. To force a hard container rebuild, simply delete this JSON file to bypass the state. Rebuilds are otherwise automatic whenever remote repository devcontainer configuration files or referenced script files are updated.
 
 ## Installation
 
@@ -48,9 +48,26 @@ The manager now prints the git SHA of the build on startup, allowing you to easi
 
 ## Container Prioritization
 The manager dynamically orders container startup operations, prioritizing repositories that have been most recently updated (pushed) on GitHub. This ensures the projects you are actively working on are spun up first.
+## Issue-Based Devcontainers & Label Tracking
+The daemon supports automatically provisioning dedicated devcontainers for open issues labeled with `seraphine` (or prefixes thereof). When it provisions these containers, it updates the GitHub issue labels to track their state:
+- `container-creating`: Added when container provisioning begins.
+- `container-ready`: Added when the container is successfully launched and ready (with `container-creating` and `container-failed` labels removed).
+- `container-failed`: Added if provisioning fails (with `container-creating` and `container-ready` labels removed).
 
-## Hooray
+When a container is hibernated due to hitting concurrent container limits, the labels are kept as-is. Similarly, when a container is cleaned up or deleted, the labels are left on the issue for historical record.
 
-Hooray
+The detailed workflow and guidelines for collaborating on these issues are documented in [issues.md](file:///workspaces/devcontainer-manager/issues.md).
 
-// dummy comment for recordcleaner CI validation
+## Startup Failure Reporting
+If a devcontainer for an issue branch fails to start (e.g. during branch creation, devpod launch, or container recreation), the manager automatically runs a background task to report the failure. It queries GitHub for any existing open issues titled `"Issue Container Startup Failed"`. If none exists, it creates a new issue with that title, applies the `seraphine-bug` label, and documents the branch name, original issue number, and startup logs/errors in the issue body.
+
+## Dynamic Startup Commands
+The manager supports dynamically injecting a startup command or prompt into the container once it starts up or is recreated. When the `-startup_command "<command>"` flag is provided, the manager will poll the container via SSH until a `tmux` session named exactly after the container ID is ready. Once ready, the command will be sent directly to that tmux session, running it dynamically inside the persistent tmux shell.
+
+## Command-Line Flags
+
+The daemon supports the following command-line flags:
+* `-once`: Run the check loop once and then exit immediately (default: `false`).
+* `-container_list <file>`: The path to the container template file to check (default: `container.list.template`).
+* `-max_issue_containers <count>`: The maximum number of concurrent running issue containers (default: `5`).
+* `-startup_command <command>`: A command/prompt to inject dynamically into the container's active tmux session once it is ready (default: `""`).
