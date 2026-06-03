@@ -58,6 +58,9 @@ When a container is hibernated due to hitting concurrent container limits, the l
 
 The detailed workflow and guidelines for collaborating on these issues are documented in [issues.md](file:///workspaces/devcontainer-manager/issues.md).
 
+## Startup Failure Reporting
+If a devcontainer for an issue branch fails to start (e.g. during branch creation, devpod launch, or container recreation), the manager automatically runs a background task to report the failure. It queries GitHub for any existing open issues titled `"Issue Container Startup Failed"`. If none exists, it creates a new issue with that title, applies the `seraphine-bug` label, and documents the branch name, original issue number, and startup logs/errors in the issue body.
+
 ## Dynamic Startup Commands
 The manager supports dynamically injecting a startup command or prompt into the container once it starts up or is recreated. When the `-startup_command "<command>"` flag is provided, the manager will poll the container via SSH until a `tmux` session named exactly after the container ID is ready. Once ready, the command will be sent directly to that tmux session, running it dynamically inside the persistent tmux shell.
 
