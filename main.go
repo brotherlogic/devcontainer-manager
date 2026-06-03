@@ -68,7 +68,7 @@ var (
 
 // We live dangerously
 const (
-	defaultIssueStartupCommand = `agy --prompt-interactive --dangerously-skip-permissions "Take a look at the status of this issue - if there's associated information in the ISSUE.md file, use that, otherwise just suggest a path forward for the issue. Do not undertake any implementation work"`
+	defaultIssueStartupCommand = `agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of this issue - if there's associated information in the ISSUE.md file, use that, otherwise just suggest a path forward for the issue. Do not undertake any implementation work"`
 	defaultBranchRef           = ""
 	DevpodLabelPrefix          = "sh.loft.devpod.workspace.id="
 	VscLabelPrefix             = "dev.containers.id="
@@ -253,9 +253,12 @@ func run(ctx context.Context, cfg *config) error {
 						validIssueContainers[containerID] = true
 						if !running[containerID] {
 							log.Printf("Discovered new issue #%d labeled 'seraphine' in %s. Provisioning container...", issueNumber, repo)
+							adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-creating", []string{"container-ready", "container-failed"})
+
 							slug, err := deriveFeatureSlug(ctx, issue.GetTitle())
 							if err != nil {
 								log.Printf("Failed to derive branch slug for issue %d: %v", issueNumber, err)
+								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
 								continue
 							}
 
@@ -263,6 +266,7 @@ func run(ctx context.Context, cfg *config) error {
 							err = ensureIssueBranchExists(ctx, client, owner, repoName, branchName)
 							if err != nil {
 								log.Printf("Failed to ensure issue branch %s exists: %v", branchName, err)
+								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
 								continue
 							}
 
@@ -271,8 +275,10 @@ func run(ctx context.Context, cfg *config) error {
 							out, err := commandRunner(devpodExe, "up", repoURL, "--id", containerID, "--ide", "none")
 							if err != nil {
 								log.Printf("Failed to launch devcontainer for issue %d: %v (output: %s)", issueNumber, err, string(out))
+								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
 							} else {
 								running[containerID] = true
+								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-ready", []string{"container-creating", "container-failed"})
 								renameDockerContainer(containerID)
 								cmdToInject := cfg.startupCommand
 								if cmdToInject == "" {
@@ -1140,6 +1146,48 @@ func ensureIssueBranchExists(ctx context.Context, client *github.Client, owner, 
 	}
 
 	return nil
+}
+
+func adjustIssueLabels(ctx context.Context, client *github.Client, owner, repo string, issueNumber int, addLabel string, removeLabels []string) {
+	if client == nil {
+		return
+	}
+	// Fetch the issue first to get current labels and avoid redundant API calls
+	issue, _, err := client.Issues.Get(ctx, owner, repo, issueNumber)
+	if err != nil {
+		log.Printf("Warning: failed to fetch issue %d for label adjustment: %v", issueNumber, err)
+		return
+	}
+
+	hasAddLabel := false
+	var existingRemoveLabels []string
+	for _, l := range issue.Labels {
+		name := l.GetName()
+		if name == addLabel {
+			hasAddLabel = true
+		}
+		for _, r := range removeLabels {
+			if name == r {
+				existingRemoveLabels = append(existingRemoveLabels, name)
+			}
+		}
+	}
+
+	// Remove labels that shouldn't be there
+	for _, r := range existingRemoveLabels {
+		_, err := client.Issues.RemoveLabelForIssue(ctx, owner, repo, issueNumber, r)
+		if err != nil {
+			log.Printf("Warning: failed to remove label %s from issue %d: %v", r, issueNumber, err)
+		}
+	}
+
+	// Add the new label if not present
+	if !hasAddLabel && addLabel != "" {
+		_, _, err := client.Issues.AddLabelsToIssue(ctx, owner, repo, issueNumber, []string{addLabel})
+		if err != nil {
+			log.Printf("Warning: failed to add label %s to issue %d: %v", addLabel, issueNumber, err)
+		}
+	}
 }
 
 func renameDockerContainer(containerID string) {
