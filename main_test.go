@@ -1054,4 +1054,3 @@ func TestRenameDockerContainer_AlreadyNamedCorrectly(t *testing.T) {
 		}
 	}
 }
-
