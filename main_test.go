@@ -1272,3 +1272,94 @@ func TestRenameDockerContainer_AlreadyNamedCorrectly(t *testing.T) {
 		}
 	}
 }
+
+func TestReportStartupFailure_NoPreexistingIssue(t *testing.T) {
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	var listCalled, createCalled bool
+
+	// Mock both list and create
+	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost {
+			createCalled = true
+			var req github.IssueRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("failed to decode request body: %v", err)
+			}
+			if req.GetTitle() != "Issue Container Startup Failed" {
+				t.Errorf("expected title 'Issue Container Startup Failed', got %q", req.GetTitle())
+			}
+			if len(*req.Labels) != 1 || (*req.Labels)[0] != "seraphine-bug" {
+				t.Errorf("expected labels ['seraphine-bug'], got %v", req.Labels)
+			}
+			body := req.GetBody()
+			if !strings.Contains(body, "feature/my-branch_42") {
+				t.Errorf("expected body to contain branch, got %q", body)
+			}
+			if !strings.Contains(body, "#42") {
+				t.Errorf("expected body to contain original issue ref, got %q", body)
+			}
+			if !strings.Contains(body, "some startup error") {
+				t.Errorf("expected body to contain startup error, got %q", body)
+			}
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"number": 99}`)
+			return
+		}
+		listCalled = true
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `[{"number": 1, "title": "Some other issue", "state": "open"}]`)
+	})
+
+	reportStartupFailure(context.Background(), client, "test-owner", "test-repo", "feature/my-branch_42", 42, fmt.Errorf("some startup error"), "some log output")
+
+	if !listCalled {
+		t.Error("expected list issues to be called")
+	}
+	if !createCalled {
+		t.Error("expected create issue to be called")
+	}
+}
+
+func TestReportStartupFailure_PreexistingIssueExists(t *testing.T) {
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	var listCalled, createCalled bool
+
+	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost {
+			createCalled = true
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
+		listCalled = true
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `[{"number": 99, "title": "Issue Container Startup Failed", "state": "open"}]`)
+	})
+
+	reportStartupFailure(context.Background(), client, "test-owner", "test-repo", "feature/my-branch_42", 42, fmt.Errorf("some startup error"), "some log output")
+
+	if !listCalled {
+		t.Error("expected list issues to be called")
+	}
+	if createCalled {
+		t.Error("expected create issue NOT to be called since one already exists")
+	}
+}
+
