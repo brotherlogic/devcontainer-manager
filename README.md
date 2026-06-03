@@ -56,6 +56,8 @@ The daemon supports automatically provisioning dedicated devcontainers for open 
 
 When a container is hibernated due to hitting concurrent container limits, the labels are kept as-is. Similarly, when a container is cleaned up or deleted, the labels are left on the issue for historical record.
 
+The detailed workflow and guidelines for collaborating on these issues are documented in [issues.md](file:///workspaces/devcontainer-manager/issues.md).
+
 ## Dynamic Startup Commands
 The manager supports dynamically injecting a startup command or prompt into the container once it starts up or is recreated. When the `-startup_command "<command>"` flag is provided, the manager will poll the container via SSH until a `tmux` session named exactly after the container ID is ready. Once ready, the command will be sent directly to that tmux session, running it dynamically inside the persistent tmux shell.
 
