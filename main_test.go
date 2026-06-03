@@ -996,3 +996,62 @@ func TestRun_RecreateIssueContainerOnHashChange(t *testing.T) {
 		t.Errorf("expected updated tracked SHA %q, got %q", expectedTrackedSHA, updatedTracked[containerID])
 	}
 }
+
+func TestRenameDockerContainer_Success(t *testing.T) {
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			// Return mock docker ps output with Devpod labels matching our container ID
+			return []byte("container_id_123|devpod-temp-name|some-image|sh.loft.devpod.workspace.id=test-repo_42,some-other-label\n"), nil
+		}
+		return []byte("success"), nil
+	}
+
+	renameDockerContainer("test-repo_42")
+
+	// Verify that docker rename was called with correct parameters
+	var dockerRenameCalled bool
+	for _, cmd := range capturedCommands {
+		if cmd[0] == "docker" && cmd[1] == "rename" {
+			dockerRenameCalled = true
+			if cmd[2] != "container_id_123" {
+				t.Errorf("expected source container ID 'container_id_123', got %q", cmd[2])
+			}
+			if cmd[3] != "test-repo_42" {
+				t.Errorf("expected target container name 'test-repo_42', got %q", cmd[3])
+			}
+		}
+	}
+
+	if !dockerRenameCalled {
+		t.Error("expected docker rename command to be called, but it was not")
+	}
+}
+
+func TestRenameDockerContainer_AlreadyNamedCorrectly(t *testing.T) {
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			return []byte("container_id_123|test-repo_42|some-image|sh.loft.devpod.workspace.id=test-repo_42,some-other-label\n"), nil
+		}
+		return []byte("success"), nil
+	}
+
+	renameDockerContainer("test-repo_42")
+
+	// Verify that docker rename was NOT called
+	for _, cmd := range capturedCommands {
+		if cmd[0] == "docker" && cmd[1] == "rename" {
+			t.Error("expected docker rename command NOT to be called, but it was")
+		}
+	}
+}
+

@@ -69,7 +69,10 @@ var (
 const (
 	defaultIssueStartupCommand = `agy --prompt "Take a look at the status of this issue - if there's associated information in the ISSUE.md file, use that, otherwise just suggest a path forward for the issue. Do not undertake any implementation work"`
 	defaultBranchRef           = ""
+	DevpodLabelPrefix          = "sh.loft.devpod.workspace.id="
+	VscLabelPrefix             = "dev.containers.id="
 )
+
 
 type config struct {
 	once               bool
@@ -194,6 +197,7 @@ func run(ctx context.Context, cfg *config) error {
 						log.Printf("Warning: failed to get composite SHA for %s: %v", repo, err)
 					}
 				}
+				renameDockerContainer(id)
 			}
 		} else {
 			if client != nil {
@@ -269,6 +273,7 @@ func run(ctx context.Context, cfg *config) error {
 								log.Printf("Failed to launch devcontainer for issue %d: %v (output: %s)", issueNumber, err, string(out))
 							} else {
 								running[containerID] = true
+								renameDockerContainer(containerID)
 								cmdToInject := cfg.startupCommand
 								if cmdToInject == "" {
 									cmdToInject = defaultIssueStartupCommand
@@ -942,6 +947,7 @@ func recreateContainer(ctx context.Context, repo string, id string, startupCmd s
 		return fmt.Errorf("%s up failed: %w (output: %s)", devpodExe, err, string(out))
 	}
 	log.Printf("Successfully recreated devcontainer for %s", repo)
+	renameDockerContainer(id)
 	if startupCmd != "" {
 		wg.Add(1)
 		go func() {
@@ -965,6 +971,7 @@ func recreateIssueContainer(ctx context.Context, owner, repoName, branchName, co
 		return fmt.Errorf("%s up failed: %w (output: %s)", devpodExe, err, string(out))
 	}
 	log.Printf("Successfully recreated devcontainer for issue container %s", containerID)
+	renameDockerContainer(containerID)
 
 	cmdToInject := startupCmd
 	if cmdToInject == "" {
@@ -1114,4 +1121,106 @@ func ensureIssueBranchExists(ctx context.Context, client *github.Client, owner, 
 	return nil
 }
 
+func renameDockerContainer(containerID string) {
+	log.Printf("Attempting to rename docker container to %s...", containerID)
+
+	out, err := commandRunner("docker", "ps", "--format", "{{.ID}}|{{.Names}}|{{.Image}}|{{.Labels}}")
+	if err != nil {
+		log.Printf("Error running docker ps: %v", err)
+		return
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	var targetID, currentName string
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "|")
+		if len(parts) >= 4 {
+			id, name, labels := parts[0], parts[1], parts[3]
+			if strings.Contains(labels, fmt.Sprintf("%s%s", DevpodLabelPrefix, containerID)) ||
+				strings.Contains(labels, fmt.Sprintf("%s%s", VscLabelPrefix, containerID)) {
+				targetID, currentName = id, name
+				break
+			}
+		}
+	}
+
+	if targetID == "" {
+		for _, line := range lines {
+			if line == "" {
+				continue
+			}
+			parts := strings.Split(line, "|")
+			if len(parts) >= 4 {
+				id, name, labels := parts[0], parts[1], parts[3]
+				if name == containerID {
+					// Only use name match if it doesn't explicitly belong to another workspace
+					if !strings.Contains(labels, DevpodLabelPrefix) && !strings.Contains(labels, VscLabelPrefix) {
+						targetID, currentName = id, name
+						break
+					}
+				}
+			}
+		}
+	}
+
+	if targetID == "" {
+		for _, line := range lines {
+			if line == "" {
+				continue
+			}
+			parts := strings.Split(line, "|")
+			if len(parts) >= 4 {
+				id, name, image, labels := parts[0], parts[1], parts[2], parts[3]
+				if strings.Contains(labels, DevpodLabelPrefix) || strings.Contains(labels, VscLabelPrefix) {
+					continue
+				}
+				if strings.Contains(image, "devpod-") && name != containerID {
+					targetID, currentName = id, name
+					break
+				}
+			}
+		}
+	}
+
+	if targetID == "" {
+		for _, line := range lines {
+			if line == "" {
+				continue
+			}
+			parts := strings.Split(line, "|")
+			if len(parts) >= 4 {
+				id, name, image, labels := parts[0], parts[1], parts[2], parts[3]
+				if strings.Contains(labels, DevpodLabelPrefix) || strings.Contains(labels, VscLabelPrefix) {
+					continue
+				}
+				if strings.Contains(image, "vsc-content") && name != containerID {
+					targetID, currentName = id, name
+					break
+				}
+			}
+		}
+	}
+
+	if targetID != "" {
+		if currentName == containerID {
+			log.Printf("Container %s is already named %s", targetID, containerID)
+			return
+		}
+
+		log.Printf("Renaming container %s (currently %s) to %s", targetID, currentName, containerID)
+		if _, err := commandRunner("docker", "rename", targetID, containerID); err != nil {
+			log.Printf("Failed to rename container: %v", err)
+		} else {
+			log.Printf("Successfully renamed container to %s", containerID)
+		}
+	} else {
+		log.Printf("Could not identify which container to rename for %s", containerID)
+	}
+}
+
 // No-op change to trigger CI for issue 98
+
