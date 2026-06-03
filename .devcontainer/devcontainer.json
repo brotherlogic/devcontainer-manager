@@ -29,6 +29,7 @@
 	"updateRemoteUserUID": true,
 	"remoteUser": "vscode",
     "workspaceFolder": "/workspaces/devcontainer-manager",
+    "postCreateCommand": "./postCreate.sh",
     	"containerEnv": {
 		"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
 		"GH_GIT_PROTOCOL": "ssh",
@@ -44,6 +45,7 @@
 			]
 		},
 	    		"source=/var/run/dbus,target=/var/run/dbus,type=bind",
-		"source=/run/user,target=/run/user,type=bind"
+	    "source=/run/user,target=/run/user,type=bind",
+	        "source=${localEnv:HOME}/.gemini,target=/home/vscode/.gemini,type=bind",
 	]
 }
