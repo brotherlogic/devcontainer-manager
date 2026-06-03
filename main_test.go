@@ -377,6 +377,13 @@ func TestRun_SkipLaunchIfAlreadyActive(t *testing.T) {
 		return client, nil
 	}
 
+	// Mock agy command slug derivation
+	originalDeriverRunAgy := defaultDeriver.runAgy
+	defer func() { defaultDeriver.runAgy = originalDeriverRunAgy }()
+	defaultDeriver.runAgy = func(ctx context.Context, prompt string) ([]byte, error) {
+		return []byte("mock_feature_slug"), nil
+	}
+
 	// Mock commandRunner
 	originalCommandRunner := commandRunner
 	defer func() { commandRunner = originalCommandRunner }()
@@ -830,3 +837,221 @@ func TestRun_InjectStartupCommandTimeout(t *testing.T) {
 		}
 	}
 }
+
+func TestRun_RecreateIssueContainerOnHashChange(t *testing.T) {
+	// Create a temporary container list file
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("test-owner/test-repo\n"); err != nil {
+		t.Fatalf("failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	// Override getConfigDir for test isolation
+	originalGetConfigDir := getConfigDir
+	tempDir := t.TempDir()
+	getConfigDir = func() string {
+		return tempDir
+	}
+	defer func() { getConfigDir = originalGetConfigDir }()
+
+	// Write an initial tracked SHA for the issue container
+	trackedSHAs := loadTrackedSHAs()
+	containerID := "test-repo_42"
+	trackedSHAs[containerID] = "devcontainer.json:old_sha_123"
+	if err := saveTrackedSHAs(trackedSHAs); err != nil {
+		t.Fatalf("failed to save mock tracked SHAs: %v", err)
+	}
+
+	// Mock HTTP server
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	// Inject getGitHubClient provider
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+
+	// Override polling times for speed
+	oldInterval := pollingInterval
+	oldTimeout := pollingTimeout
+	pollingInterval = 1 * time.Millisecond
+	pollingTimeout = 100 * time.Millisecond
+	defer func() {
+		pollingInterval = oldInterval
+		pollingTimeout = oldTimeout
+	}()
+
+	// Mock agy command slug derivation
+	originalDeriverRunAgy := defaultDeriver.runAgy
+	defer func() { defaultDeriver.runAgy = originalDeriverRunAgy }()
+	defaultDeriver.runAgy = func(ctx context.Context, prompt string) ([]byte, error) {
+		return []byte("mock_feature_slug"), nil
+	}
+
+	// Mock commandRunner
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			// Container is already running
+			return []byte("test-repo Running\ntest-repo_42 Running\n"), nil
+		}
+		return []byte("success"), nil
+	}
+
+	// Setup GitHub API mock responses
+	// 1. Issues list
+	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `[
+			{
+				"number": 42,
+				"title": "My Awesome Feature",
+				"labels": [{"name": "seraphine-feature"}]
+			}
+		]`)
+	})
+
+	// 2. Issue detail (to keep it open and active, preventing cleanup)
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/42", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"number": 42, "state": "open", "updated_at": "2026-05-31T12:00:00Z", "labels": [{"name": "seraphine"}]}`)
+	})
+
+	// 3. New devcontainer file contents to produce a NEW SHA (new_sha_456)
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		// Verify the requested reference contains the branch name we expect
+		ref := r.URL.Query().Get("ref")
+		if ref == "" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		expectedRef := "feature/mock_feature_slug_42"
+		if ref != expectedRef {
+			t.Errorf("expected ref parameter %q, got %q", expectedRef, ref)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"type": "file", "encoding": "base64", "content": "e30=", "sha": "new_sha_456"}`) // e30= is base64 for "{}"
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	cfg := &config{
+		once:               true,
+		containerList:      tmpFile.Name(),
+		maxIssueContainers: 5,
+	}
+
+	err = run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify that the container was recreated (deleted and launched again)
+	var deleted bool
+	var recreated bool
+	for _, cmd := range capturedCommands {
+		if cmd[0] == devpodExe && cmd[1] == "delete" && cmd[2] == "test-repo_42" {
+			deleted = true
+		}
+		if cmd[0] == devpodExe && cmd[1] == "up" {
+			expectedURL := "git@github.com:test-owner/test-repo@feature/mock_feature_slug_42"
+			if len(cmd) > 2 && cmd[2] == expectedURL && cmd[4] == "test-repo_42" {
+				recreated = true
+			}
+		}
+	}
+
+	if !deleted {
+		t.Error("expected container test-repo_42 to be deleted before recreation, but it was not")
+	}
+	if !recreated {
+		t.Error("expected container test-repo_42 to be recreated (up) with the issue branch, but it was not")
+	}
+
+	// Verify that tracked SHA got updated in the file
+	updatedTracked := loadTrackedSHAs()
+	expectedTrackedSHA := "devcontainer.json:new_sha_456"
+	if updatedTracked[containerID] != expectedTrackedSHA {
+		t.Errorf("expected updated tracked SHA %q, got %q", expectedTrackedSHA, updatedTracked[containerID])
+	}
+}
+
+func TestRenameDockerContainer_Success(t *testing.T) {
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			// Return mock docker ps output with Devpod labels matching our container ID
+			return []byte("container_id_123|devpod-temp-name|some-image|sh.loft.devpod.workspace.id=test-repo_42,some-other-label\n"), nil
+		}
+		return []byte("success"), nil
+	}
+
+	renameDockerContainer("test-repo_42")
+
+	// Verify that docker rename was called with correct parameters
+	var dockerRenameCalled bool
+	for _, cmd := range capturedCommands {
+		if cmd[0] == "docker" && cmd[1] == "rename" {
+			dockerRenameCalled = true
+			if cmd[2] != "container_id_123" {
+				t.Errorf("expected source container ID 'container_id_123', got %q", cmd[2])
+			}
+			if cmd[3] != "test-repo_42" {
+				t.Errorf("expected target container name 'test-repo_42', got %q", cmd[3])
+			}
+		}
+	}
+
+	if !dockerRenameCalled {
+		t.Error("expected docker rename command to be called, but it was not")
+	}
+}
+
+func TestRenameDockerContainer_AlreadyNamedCorrectly(t *testing.T) {
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			return []byte("container_id_123|test-repo_42|some-image|sh.loft.devpod.workspace.id=test-repo_42,some-other-label\n"), nil
+		}
+		return []byte("success"), nil
+	}
+
+	renameDockerContainer("test-repo_42")
+
+	// Verify that docker rename was NOT called
+	for _, cmd := range capturedCommands {
+		if cmd[0] == "docker" && cmd[1] == "rename" {
+			t.Error("expected docker rename command NOT to be called, but it was")
+		}
+	}
+}
+
