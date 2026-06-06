@@ -81,6 +81,7 @@ type config struct {
 	containerList      string
 	maxIssueContainers int
 	startupCommand     string
+	maxConcurrency     int
 }
 
 func parseFlags(args []string) (*config, error) {
@@ -89,6 +90,7 @@ func parseFlags(args []string) (*config, error) {
 	containerList := fs.String("container_list", "container.list.template", "The list of containers to run")
 	maxIssueContainers := fs.Int("max_issue_containers", 5, "Maximum number of concurrent running issue containers")
 	startupCommand := fs.String("startup_command", "", "Command to inject into the container's tmux session on startup")
+	maxConcurrency := fs.Int("max-concurrency", 10, "Maximum concurrency limit")
 
 	err := fs.Parse(args)
 	if err != nil {
@@ -105,6 +107,7 @@ func parseFlags(args []string) (*config, error) {
 		containerList:      *containerList,
 		maxIssueContainers: *maxIssueContainers,
 		startupCommand:     startupCmdVal,
+		maxConcurrency:     *maxConcurrency,
 	}, nil
 }
 
