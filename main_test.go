@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1390,5 +1391,47 @@ func TestWithGitHubRetry_SuccessAfterRetry(t *testing.T) {
 		t.Errorf("expected 3 calls, got %d", callCount)
 	}
 }
+
+func TestTrackedSHAsConcurrency(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "devcontainer-manager-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	oldGetConfigDir := getConfigDir
+	getConfigDir = func() string {
+		return tempDir
+	}
+	defer func() { getConfigDir = oldGetConfigDir }()
+
+	trackedSHAs := loadTrackedSHAs()
+
+	const goroutines = 10
+	const iterations = 50
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines * 2)
+
+	for i := 0; i < goroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				repo := fmt.Sprintf("owner/repo-%d-%d", id, j)
+				updateAndSaveRepoSHA(repo, "some-sha", trackedSHAs)
+			}
+		}(i)
+
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				_ = loadTrackedSHAs()
+			}
+		}(i)
+	}
+
+	wg.Wait()
+}
+
 
 
