@@ -66,6 +66,7 @@ var gitHubClientProvider = getGHClient
 var (
 	pollingInterval = 5 * time.Second
 	pollingTimeout  = 5 * time.Minute
+	shaMutex        sync.RWMutex
 )
 
 // We live dangerously
@@ -210,7 +211,7 @@ func run(ctx context.Context, cfg *config) error {
 				if err != nil {
 					log.Printf("Warning: failed to get composite SHA for %s: %v", repo, err)
 				} else if found {
-					lastSeen, exists := trackedSHAs[repo]
+					lastSeen, exists := getTrackedSHA(repo, trackedSHAs)
 					if !exists {
 						log.Printf("Initial tracking established for %s at %s", repo, compositeSHA)
 						updateAndSaveRepoSHA(repo, compositeSHA, trackedSHAs)
@@ -319,7 +320,7 @@ func run(ctx context.Context, cfg *config) error {
 							if err != nil {
 								log.Printf("Warning: failed to get composite SHA for issue container %s: %v", containerID, err)
 							} else if found {
-								lastSeen, exists := trackedSHAs[containerID]
+								lastSeen, exists := getTrackedSHA(containerID, trackedSHAs)
 								if !exists {
 									log.Printf("Initial tracking established for issue container %s at %s", containerID, compositeSHA)
 									updateAndSaveRepoSHA(containerID, compositeSHA, trackedSHAs)
@@ -451,8 +452,8 @@ func run(ctx context.Context, cfg *config) error {
 									if errDelete != nil {
 										log.Printf("Failed to delete container %s during cleanup: %v", id, errDelete)
 									} else {
-										if _, exists := trackedSHAs[id]; exists {
-											delete(trackedSHAs, id)
+										if _, exists := getTrackedSHA(id, trackedSHAs); exists {
+											deleteTrackedSHA(id, trackedSHAs)
 											trackedSHAsChanged = true
 										}
 									}
@@ -499,8 +500,8 @@ func run(ctx context.Context, cfg *config) error {
 						if errDel != nil {
 							log.Printf("Warning: failed to delete container %s during extra cleanup: %v", cName, errDel)
 						} else {
-							if _, exists := trackedSHAs[cName]; exists {
-								delete(trackedSHAs, cName)
+							if _, exists := getTrackedSHA(cName, trackedSHAs); exists {
+								deleteTrackedSHA(cName, trackedSHAs)
 								trackedSHAsChanged = true
 							}
 						}
@@ -599,6 +600,12 @@ var getConfigDir = func() string {
 }
 
 func loadTrackedSHAs() map[string]string {
+	shaMutex.RLock()
+	defer shaMutex.RUnlock()
+	return loadTrackedSHAsLocked()
+}
+
+func loadTrackedSHAsLocked() map[string]string {
 	trackerPath := filepath.Join(getConfigDir(), "tracked_shas.json")
 	shas := make(map[string]string)
 
@@ -617,6 +624,12 @@ func loadTrackedSHAs() map[string]string {
 }
 
 func saveTrackedSHAs(shas map[string]string) error {
+	shaMutex.Lock()
+	defer shaMutex.Unlock()
+	return saveTrackedSHAsLocked(shas)
+}
+
+func saveTrackedSHAsLocked(shas map[string]string) error {
 	trackerPath := filepath.Join(getConfigDir(), "tracked_shas.json")
 	bytes, err := json.MarshalIndent(shas, "", "  ")
 	if err != nil {
@@ -626,10 +639,25 @@ func saveTrackedSHAs(shas map[string]string) error {
 }
 
 func updateAndSaveRepoSHA(repo string, sha string, trackedSHAs map[string]string) {
+	shaMutex.Lock()
+	defer shaMutex.Unlock()
 	trackedSHAs[repo] = sha
-	if err := saveTrackedSHAs(trackedSHAs); err != nil {
+	if err := saveTrackedSHAsLocked(trackedSHAs); err != nil {
 		log.Printf("Warning: failed to save tracked SHAs: %v", err)
 	}
+}
+
+func getTrackedSHA(repo string, trackedSHAs map[string]string) (string, bool) {
+	shaMutex.RLock()
+	defer shaMutex.RUnlock()
+	val, ok := trackedSHAs[repo]
+	return val, ok
+}
+
+func deleteTrackedSHA(repo string, trackedSHAs map[string]string) {
+	shaMutex.Lock()
+	defer shaMutex.Unlock()
+	delete(trackedSHAs, repo)
 }
 
 func stripComments(jsonStr string) string {
@@ -1328,5 +1356,54 @@ func reportStartupFailure(ctx context.Context, client *github.Client, owner, rep
 		log.Printf("Warning: failed to create startup failure issue in %s/%s: %v", owner, repo, err)
 	}
 }
+
+func withGitHubRetry(ctx context.Context, f func() (*github.Response, error)) error {
+	backoff := 100 * time.Millisecond
+	maxBackoff := 10 * time.Second
+	maxRetries := 5
+
+	for i := 0; i < maxRetries; i++ {
+		resp, err := f()
+		if err == nil {
+			return nil
+		}
+
+		isRateLimit := false
+		if resp != nil && resp.Response != nil {
+			status := resp.Response.StatusCode
+			if status == http.StatusForbidden || status == http.StatusTooManyRequests {
+				isRateLimit = true
+			}
+		}
+
+		if _, ok := err.(*github.RateLimitError); ok {
+			isRateLimit = true
+		}
+		if _, ok := err.(*github.AbuseRateLimitError); ok {
+			isRateLimit = true
+		}
+
+		if !isRateLimit {
+			return err
+		}
+
+		log.Printf("GitHub API rate limit encountered (attempt %d/%d). Retrying in %v...", i+1, maxRetries, backoff)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
+
+	_, err := f()
+	return err
+}
+
 
 
