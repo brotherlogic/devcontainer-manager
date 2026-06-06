@@ -70,7 +70,12 @@ The repository includes an Issue Closer GitHub Action (`.github/workflows/issue-
 ## Assign Reviewer Workflow
 The repository includes an Assign Reviewer GitHub Action (`.github/workflows/assign-reviewer.yml`) which runs upon successful completion of the `Validate PR` workflow. It automatically assigns the repository owner (`brotherlogic`) as a reviewer on the pull request.
 
+## GitHub API Rate Limit Retries
+The manager wraps GitHub API client calls in a retry handler that performs exponential backoff when encountering rate limit responses (secondary rate limit: HTTP 403 or 429) or standard Rate Limit/Abuse Rate Limit errors. This ensures resilient synchronization when running concurrent operations or API-heavy tasks.
+
+
 ## Command-Line Flags
+
 
 The daemon supports the following command-line flags:
 * `-once`: Run the check loop once and then exit immediately (default: `false`).
