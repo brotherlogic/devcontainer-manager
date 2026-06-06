@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1492,4 +1493,87 @@ func TestTrackedSHAsConcurrency(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestRun_ConcurrencySemaphoreLimit(t *testing.T) {
+	// Create a temporary container list file with 5 repositories
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	repos := []string{
+		"owner/repo1",
+		"owner/repo2",
+		"owner/repo3",
+		"owner/repo4",
+		"owner/repo5",
+	}
+	for _, r := range repos {
+		if _, err := tmpFile.WriteString(r + "\n"); err != nil {
+			t.Fatalf("failed to write to temp file: %v", err)
+		}
+	}
+	tmpFile.Close()
+
+	// Use --max-concurrency = 2
+	cfg := &config{
+		once:               true,
+		containerList:      tmpFile.Name(),
+		maxConcurrency:     2,
+		maxIssueContainers: 5,
+	}
+
+	// Mock commandRunner with an artificial delay and trace concurrency
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var activeRuns int32
+	var maxActiveRuns int32
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			// devcontainers list: return empty so it tries to start all of them
+			return []byte(""), nil
+		}
+		if name == devpodExe && len(args) > 0 && args[0] == "up" {
+			currentActive := atomic.AddInt32(&activeRuns, 1)
+			defer atomic.AddInt32(&activeRuns, -1)
+
+			// Store maximum active concurrency observed
+			for {
+				max := atomic.LoadInt32(&maxActiveRuns)
+				if currentActive <= max {
+					break
+				}
+				if atomic.CompareAndSwapInt32(&maxActiveRuns, max, currentActive) {
+					break
+				}
+			}
+
+			// Simulate container bring-up delay
+			time.Sleep(50 * time.Millisecond)
+			return []byte("success"), nil
+		}
+		return []byte("success"), nil
+	}
+
+	// Disable github client to avoid network calls and bypass issue scanning
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return nil, fmt.Errorf("no gh client in this test")
+	}
+
+	err = run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	observedMax := atomic.LoadInt32(&maxActiveRuns)
+	if observedMax != 2 {
+		t.Errorf("expected max concurrency limit of 2, but observed %d concurrent runs", observedMax)
+	}
+}
+
 

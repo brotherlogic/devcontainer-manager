@@ -182,166 +182,200 @@ func run(ctx context.Context, cfg *config) error {
 		log.Printf("Warning: failed to get GitHub client: %v. Change detection will be bypassed.", clientErr)
 	}
 
+	maxConcurrency := cfg.maxConcurrency
+	if maxConcurrency <= 0 {
+		maxConcurrency = 10
+	}
+	sem := make(chan struct{}, maxConcurrency)
+
 	validIssueContainers := make(map[string]bool)
+	var stateMu sync.Mutex
+	var loopWg sync.WaitGroup
+
 	for _, repo := range repos {
-		parts := strings.Split(repo, "/")
-		id := parts[len(parts)-1]
-		log.Printf("DEBUG: repo is %s, client is nil? %v", repo, client == nil)
-		if !running[id] {
-			logWithPrefix(repo, "Starting devcontainer")
-			out, err := runCommandWithLog(repo, devpodExe, "up", fmt.Sprintf("git@github.com:%s", repo), "--id", id, "--ide", "none")
-			if err != nil {
-				logWithPrefix(repo, "Failed to start devcontainer: %v (output: %s)", err, string(out))
-			} else {
-				if cfg.startupCommand != "" {
-					wg.Add(1)
-					go func(cid string) {
-						defer wg.Done()
-						if err := injectStartupCommand(ctx, repo, cid, cfg.startupCommand); err != nil {
-							logWithPrefix(repo, "ERROR: Failed to inject startup command for container %s: %v", cid, err)
-						}
-					}(id)
+		sem <- struct{}{}
+		loopWg.Add(1)
+		go func(repo string) {
+			defer func() { <-sem }()
+			defer loopWg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					logWithPrefix(repo, "Recovered from panic: %v", r)
 				}
+			}()
+
+			parts := strings.Split(repo, "/")
+			id := parts[len(parts)-1]
+			log.Printf("DEBUG: repo is %s, client is nil? %v", repo, client == nil)
+
+			stateMu.Lock()
+			isAlreadyRunning := running[id]
+			stateMu.Unlock()
+
+			if !isAlreadyRunning {
+				logWithPrefix(repo, "Starting devcontainer")
+				out, err := runCommandWithLog(repo, devpodExe, "up", fmt.Sprintf("git@github.com:%s", repo), "--id", id, "--ide", "none")
+				if err != nil {
+					logWithPrefix(repo, "Failed to start devcontainer: %v (output: %s)", err, string(out))
+				} else {
+					if cfg.startupCommand != "" {
+						wg.Add(1)
+						go func(cid string) {
+							defer wg.Done()
+							if err := injectStartupCommand(ctx, repo, cid, cfg.startupCommand); err != nil {
+								logWithPrefix(repo, "ERROR: Failed to inject startup command for container %s: %v", cid, err)
+							}
+						}(id)
+					}
+					if client != nil {
+						compositeSHA, found, err := getRepoCompositeSHA(ctx, client, repo, defaultBranchRef)
+						if err == nil && found {
+							updateAndSaveRepoSHA(repo, compositeSHA, trackedSHAs)
+						} else if err != nil {
+							logWithPrefix(repo, "Warning: failed to get composite SHA: %v", err)
+						}
+					}
+					renameDockerContainer(id)
+				}
+			} else {
 				if client != nil {
 					compositeSHA, found, err := getRepoCompositeSHA(ctx, client, repo, defaultBranchRef)
-					if err == nil && found {
-						updateAndSaveRepoSHA(repo, compositeSHA, trackedSHAs)
-					} else if err != nil {
+					if err != nil {
 						logWithPrefix(repo, "Warning: failed to get composite SHA: %v", err)
-					}
-				}
-				renameDockerContainer(id)
-			}
-		} else {
-			if client != nil {
-				compositeSHA, found, err := getRepoCompositeSHA(ctx, client, repo, defaultBranchRef)
-				if err != nil {
-					logWithPrefix(repo, "Warning: failed to get composite SHA: %v", err)
-				} else if found {
-					lastSeen, exists := getTrackedSHA(repo, trackedSHAs)
-					if !exists {
-						logWithPrefix(repo, "Initial tracking established at %s", compositeSHA)
-						updateAndSaveRepoSHA(repo, compositeSHA, trackedSHAs)
-					} else if lastSeen != compositeSHA {
-						logWithPrefix(repo, "Detected devcontainer configuration/script change! Recreating container...")
-						logWithPrefix(repo, "Old tracking: %s", lastSeen)
-						logWithPrefix(repo, "New tracking: %s", compositeSHA)
-
-						err := recreateContainer(ctx, repo, id, cfg.startupCommand, &wg)
-						if err != nil {
-							logWithPrefix(repo, "Failed to recreate devcontainer: %v", err)
-						} else {
+					} else if found {
+						lastSeen, exists := getTrackedSHA(repo, trackedSHAs)
+						if !exists {
+							logWithPrefix(repo, "Initial tracking established at %s", compositeSHA)
 							updateAndSaveRepoSHA(repo, compositeSHA, trackedSHAs)
-						}
-					}
-				}
-			}
-		}
+						} else if lastSeen != compositeSHA {
+							logWithPrefix(repo, "Detected devcontainer configuration/script change! Recreating container...")
+							logWithPrefix(repo, "Old tracking: %s", lastSeen)
+							logWithPrefix(repo, "New tracking: %s", compositeSHA)
 
-		// Issue-scanning and launching loop for per-issue devcontainers
-		if client != nil {
-			parts := strings.Split(repo, "/")
-			if len(parts) == 2 {
-				owner, repoName := parts[0], parts[1]
-				opts := &github.IssueListByRepoOptions{State: "open"}
-				issues, _, err := client.Issues.ListByRepo(ctx, owner, repoName, opts)
-				if err != nil {
-					log.Printf("Warning: failed to list issues for %s: %v", repo, err)
-				} else {
-					log.Printf("DEBUG: Successfully fetched %d issues for %s", len(issues), repo)
-					for _, issue := range issues {
-						hasSeraphineLabel := false
-						for _, label := range issue.Labels {
-							if strings.HasPrefix(label.GetName(), "seraphine") {
-								hasSeraphineLabel = true
-								break
-							}
-						}
-						if !hasSeraphineLabel {
-							continue
-						}
-
-						issueNumber := issue.GetNumber()
-						containerID := fmt.Sprintf("%s_%d", id, issueNumber)
-						validIssueContainers[containerID] = true
-						if !running[containerID] {
-							log.Printf("Discovered new issue #%d labeled 'seraphine' in %s. Provisioning container...", issueNumber, repo)
-							adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-creating", []string{"container-ready", "container-failed"})
-
-							slug, err := deriveFeatureSlug(ctx, issue.GetTitle())
+							err := recreateContainer(ctx, repo, id, cfg.startupCommand, &wg)
 							if err != nil {
-								log.Printf("Failed to derive branch slug for issue %d: %v", issueNumber, err)
-								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
-								go reportStartupFailure(ctx, client, owner, repoName, "", issueNumber, err, "")
-								continue
-							}
-
-							branchName := fmt.Sprintf("feature/%s_%d", slug, issueNumber)
-							err = ensureIssueBranchExists(ctx, client, owner, repoName, branchName)
-							if err != nil {
-								log.Printf("Failed to ensure issue branch %s exists: %v", branchName, err)
-								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
-								go reportStartupFailure(ctx, client, owner, repoName, branchName, issueNumber, err, "")
-								continue
-							}
-
-							repoURL := fmt.Sprintf("git@github.com:%s/%s@%s", owner, repoName, branchName)
-							logWithPrefix(repo, "Launching issue container %s on branch %s", containerID, branchName)
-							out, err := runCommandWithLog(repo, devpodExe, "up", repoURL, "--id", containerID, "--ide", "none")
-							if err != nil {
-								logWithPrefix(repo, "Failed to launch devcontainer for issue %d: %v (output: %s)", issueNumber, err, string(out))
-								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
-								go reportStartupFailure(ctx, client, owner, repoName, branchName, issueNumber, err, string(out))
+								logWithPrefix(repo, "Failed to recreate devcontainer: %v", err)
 							} else {
-								running[containerID] = true
-								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-ready", []string{"container-creating", "container-failed"})
-								renameDockerContainer(containerID)
-								cmdToInject := cfg.startupCommand
-								if cmdToInject == "" {
-									cmdToInject = defaultIssueStartupCommand
-								}
-								wg.Add(1)
-								go func(cid string) {
-									defer wg.Done()
-									if err := injectStartupCommand(ctx, repo, cid, cmdToInject); err != nil {
-										logWithPrefix(repo, "ERROR: Failed to inject startup command for container %s: %v", cid, err)
-									}
-								}(containerID)
+								updateAndSaveRepoSHA(repo, compositeSHA, trackedSHAs)
+							}
+						}
+					}
+				}
+			}
 
-								compositeSHA, found, err := getRepoCompositeSHA(ctx, client, repo, branchName)
-								if err == nil && found {
-									updateAndSaveRepoSHA(containerID, compositeSHA, trackedSHAs)
-								} else if err != nil {
-									logWithPrefix(repo, "Warning: failed to get composite SHA for issue container %s on branch %s: %v", containerID, branchName, err)
+			// Issue-scanning and launching loop for per-issue devcontainers
+			if client != nil {
+				parts := strings.Split(repo, "/")
+				if len(parts) == 2 {
+					owner, repoName := parts[0], parts[1]
+					opts := &github.IssueListByRepoOptions{State: "open"}
+					issues, _, err := client.Issues.ListByRepo(ctx, owner, repoName, opts)
+					if err != nil {
+						log.Printf("Warning: failed to list issues for %s: %v", repo, err)
+					} else {
+						log.Printf("DEBUG: Successfully fetched %d issues for %s", len(issues), repo)
+						for _, issue := range issues {
+							hasSeraphineLabel := false
+							for _, label := range issue.Labels {
+								if strings.HasPrefix(label.GetName(), "seraphine") {
+									hasSeraphineLabel = true
+									break
 								}
 							}
-						} else {
-							slug, err := deriveFeatureSlug(ctx, issue.GetTitle())
-							if err != nil {
-								log.Printf("Failed to derive branch slug for issue %d: %v", issueNumber, err)
+							if !hasSeraphineLabel {
 								continue
 							}
 
-							branchName := fmt.Sprintf("feature/%s_%d", slug, issueNumber)
-							compositeSHA, found, err := getRepoCompositeSHA(ctx, client, repo, branchName)
-							if err != nil {
-								log.Printf("Warning: failed to get composite SHA for issue container %s: %v", containerID, err)
-							} else if found {
-								lastSeen, exists := getTrackedSHA(containerID, trackedSHAs)
-								if !exists {
-									log.Printf("Initial tracking established for issue container %s at %s", containerID, compositeSHA)
-									updateAndSaveRepoSHA(containerID, compositeSHA, trackedSHAs)
-								} else if lastSeen != compositeSHA {
-									log.Printf("Detected devcontainer configuration/script change in issue container %s! Recreating container...", containerID)
-									log.Printf("Old tracking: %s", lastSeen)
-									log.Printf("New tracking: %s", compositeSHA)
+							issueNumber := issue.GetNumber()
+							containerID := fmt.Sprintf("%s_%d", id, issueNumber)
 
-									err := recreateIssueContainer(ctx, owner, repoName, branchName, containerID, cfg.startupCommand, &wg)
-									if err != nil {
-										log.Printf("Failed to recreate devcontainer for issue %d: %v", issueNumber, err)
-										go reportStartupFailure(ctx, client, owner, repoName, branchName, issueNumber, err, "")
-									} else {
+							stateMu.Lock()
+							validIssueContainers[containerID] = true
+							isIssueRunning := running[containerID]
+							stateMu.Unlock()
+
+							if !isIssueRunning {
+								log.Printf("Discovered new issue #%d labeled 'seraphine' in %s. Provisioning container...", issueNumber, repo)
+								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-creating", []string{"container-ready", "container-failed"})
+
+								slug, err := deriveFeatureSlug(ctx, issue.GetTitle())
+								if err != nil {
+									log.Printf("Failed to derive branch slug for issue %d: %v", issueNumber, err)
+									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
+									go reportStartupFailure(ctx, client, owner, repoName, "", issueNumber, err, "")
+									continue
+								}
+
+								branchName := fmt.Sprintf("feature/%s_%d", slug, issueNumber)
+								err = ensureIssueBranchExists(ctx, client, owner, repoName, branchName)
+								if err != nil {
+									log.Printf("Failed to ensure issue branch %s exists: %v", branchName, err)
+									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
+									go reportStartupFailure(ctx, client, owner, repoName, branchName, issueNumber, err, "")
+									continue
+								}
+
+								repoURL := fmt.Sprintf("git@github.com:%s/%s@%s", owner, repoName, branchName)
+								logWithPrefix(repo, "Launching issue container %s on branch %s", containerID, branchName)
+								out, err := runCommandWithLog(repo, devpodExe, "up", repoURL, "--id", containerID, "--ide", "none")
+								if err != nil {
+									logWithPrefix(repo, "Failed to launch devcontainer for issue %d: %v (output: %s)", issueNumber, err, string(out))
+									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
+									go reportStartupFailure(ctx, client, owner, repoName, branchName, issueNumber, err, string(out))
+								} else {
+									stateMu.Lock()
+									running[containerID] = true
+									stateMu.Unlock()
+
+									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-ready", []string{"container-creating", "container-failed"})
+									renameDockerContainer(containerID)
+									cmdToInject := cfg.startupCommand
+									if cmdToInject == "" {
+										cmdToInject = defaultIssueStartupCommand
+									}
+									wg.Add(1)
+									go func(cid string) {
+										defer wg.Done()
+										if err := injectStartupCommand(ctx, repo, cid, cmdToInject); err != nil {
+											logWithPrefix(repo, "ERROR: Failed to inject startup command for container %s: %v", cid, err)
+										}
+									}(containerID)
+
+									compositeSHA, found, err := getRepoCompositeSHA(ctx, client, repo, branchName)
+									if err == nil && found {
 										updateAndSaveRepoSHA(containerID, compositeSHA, trackedSHAs)
+									} else if err != nil {
+										logWithPrefix(repo, "Warning: failed to get composite SHA for issue container %s on branch %s: %v", containerID, branchName, err)
+									}
+								}
+							} else {
+								slug, err := deriveFeatureSlug(ctx, issue.GetTitle())
+								if err != nil {
+									log.Printf("Failed to derive branch slug for issue %d: %v", issueNumber, err)
+									continue
+								}
+
+								branchName := fmt.Sprintf("feature/%s_%d", slug, issueNumber)
+								compositeSHA, found, err := getRepoCompositeSHA(ctx, client, repo, branchName)
+								if err != nil {
+									log.Printf("Warning: failed to get composite SHA for issue container %s: %v", containerID, err)
+								} else if found {
+									lastSeen, exists := getTrackedSHA(containerID, trackedSHAs)
+									if !exists {
+										log.Printf("Initial tracking established for issue container %s at %s", containerID, compositeSHA)
+										updateAndSaveRepoSHA(containerID, compositeSHA, trackedSHAs)
+									} else if lastSeen != compositeSHA {
+										log.Printf("Detected devcontainer configuration/script change in issue container %s! Recreating container...", containerID)
+										log.Printf("Old tracking: %s", lastSeen)
+										log.Printf("New tracking: %s", compositeSHA)
+
+										err := recreateIssueContainer(ctx, owner, repoName, branchName, containerID, cfg.startupCommand, &wg)
+										if err != nil {
+											log.Printf("Failed to recreate devcontainer for issue %d: %v", issueNumber, err)
+											go reportStartupFailure(ctx, client, owner, repoName, branchName, issueNumber, err, "")
+										} else {
+											updateAndSaveRepoSHA(containerID, compositeSHA, trackedSHAs)
+										}
 									}
 								}
 							}
@@ -349,8 +383,9 @@ func run(ctx context.Context, cfg *config) error {
 					}
 				}
 			}
-		}
+		}(repo)
 	}
+	loopWg.Wait()
 
 	// Resource Management & Cleanup Logic for issue containers
 	if client != nil {
