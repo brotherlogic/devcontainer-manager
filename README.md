@@ -67,8 +67,12 @@ The manager supports dynamically injecting a startup command or prompt into the 
 ## Issue Closer Workflow
 The repository includes an Issue Closer GitHub Action (`.github/workflows/issue-closer.yml`) which runs every 5 minutes. It automatically queries GitHub's native Sub-issues API for open issues and closes parent issues if all of their sub-issues are closed.
 
+## Assign Reviewer Workflow
+The repository includes an Assign Reviewer GitHub Action (`.github/workflows/assign-reviewer.yml`) which runs upon successful completion of the `Validate PR` workflow. It automatically assigns the repository owner (`brotherlogic`) as a reviewer on the pull request.
+
 ## GitHub API Rate Limit Retries
 The manager wraps GitHub API client calls in a retry handler that performs exponential backoff when encountering rate limit responses (secondary rate limit: HTTP 403 or 429) or standard Rate Limit/Abuse Rate Limit errors. This ensures resilient synchronization when running concurrent operations or API-heavy tasks.
+
 
 ## Command-Line Flags
 
