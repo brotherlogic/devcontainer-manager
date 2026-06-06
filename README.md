@@ -67,6 +67,9 @@ The manager supports dynamically injecting a startup command or prompt into the 
 ## Issue Closer Workflow
 The repository includes an Issue Closer GitHub Action (`.github/workflows/issue-closer.yml`) which runs every 5 minutes. It automatically queries GitHub's native Sub-issues API for open issues and closes parent issues if all of their sub-issues are closed.
 
+## Assign Reviewer Workflow
+The repository includes an Assign Reviewer GitHub Action (`.github/workflows/assign-reviewer.yml`) which runs upon successful completion of the `Validate PR` workflow. It automatically assigns the repository owner (`brotherlogic`) as a reviewer on the pull request.
+
 ## Command-Line Flags
 
 The daemon supports the following command-line flags:

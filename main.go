@@ -1,5 +1,5 @@
 package main
-// Trigger PR review
+// Trigger PR review for assign reviewer
 
 
 import (
