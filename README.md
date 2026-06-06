@@ -48,6 +48,9 @@ The manager now prints the git SHA of the build on startup, allowing you to easi
 
 ## Container Prioritization
 The manager dynamically orders container startup operations, prioritizing repositories that have been most recently updated (pushed) on GitHub. This ensures the projects you are actively working on are spun up first.
+## Prefixed & Split Logging
+To ensure readability when multiple devcontainers are managed concurrently, all log messages and command runner outputs are prepended with the repository identifier prefix `[owner/repo]`. Multi-line command runner outputs are automatically split by line and logged using this prefix.
+
 ## Issue-Based Devcontainers & Label Tracking
 The daemon supports automatically provisioning dedicated devcontainers for open issues labeled with `seraphine` (or prefixes thereof). When it provisions these containers, it updates the GitHub issue labels to track their state:
 - `container-creating`: Added when container provisioning begins.
