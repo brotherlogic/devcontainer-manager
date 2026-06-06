@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1362,4 +1364,48 @@ func TestReportStartupFailure_PreexistingIssueExists(t *testing.T) {
 		t.Error("expected create issue NOT to be called since one already exists")
 	}
 }
+
+func TestLogWithPrefixAndCommandRunner(t *testing.T) {
+	// 1. Test logWithPrefix
+	var buf bytes.Buffer
+	originalOutput := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(originalOutput)
+
+	logWithPrefix("test-owner/test-repo", "hello %s", "world")
+	logStr := buf.String()
+	if !strings.Contains(logStr, "[test-owner/test-repo] hello world") {
+		t.Errorf("expected log to contain '[test-owner/test-repo] hello world', got %q", logStr)
+	}
+
+	// 2. Test commandRunner prefixing/splitting output by line
+	buf.Reset()
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		return []byte("line1\nline2\n\nline3"), nil
+	}
+
+	out, err := runCommandWithLog("test-owner/test-repo", "some-cmd")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(out) != "line1\nline2\n\nline3" {
+		t.Errorf("expected original output, got %q", string(out))
+	}
+
+	logStr = buf.String()
+	expectedLines := []string{
+		"[test-owner/test-repo] line1",
+		"[test-owner/test-repo] line2",
+		"[test-owner/test-repo] line3",
+	}
+	for _, expected := range expectedLines {
+		if !strings.Contains(logStr, expected) {
+			t.Errorf("expected log to contain %q, got %q", expected, logStr)
+		}
+	}
+}
+
 
