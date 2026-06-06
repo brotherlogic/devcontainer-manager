@@ -1,14 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,10 +36,14 @@ func TestParseFlags_Defaults(t *testing.T) {
 	if cfg.maxIssueContainers != 5 {
 		t.Errorf("expected maxIssueContainers to be 5, got %d", cfg.maxIssueContainers)
 	}
+
+	if cfg.maxConcurrency != 10 {
+		t.Errorf("expected maxConcurrency to be 10, got %d", cfg.maxConcurrency)
+	}
 }
 
 func TestParseFlags_ExplicitValue(t *testing.T) {
-	cfg, err := parseFlags([]string{"-max_issue_containers", "10", "-once", "-container_list", "custom.list"})
+	cfg, err := parseFlags([]string{"-max_issue_containers", "10", "-once", "-container_list", "custom.list", "-max-concurrency", "15"})
 	if err != nil {
 		t.Fatalf("unexpected error parsing flags: %v", err)
 	}
@@ -51,12 +59,23 @@ func TestParseFlags_ExplicitValue(t *testing.T) {
 	if cfg.maxIssueContainers != 10 {
 		t.Errorf("expected maxIssueContainers to be 10, got %d", cfg.maxIssueContainers)
 	}
+
+	if cfg.maxConcurrency != 15 {
+		t.Errorf("expected maxConcurrency to be 15, got %d", cfg.maxConcurrency)
+	}
 }
 
 func TestParseFlags_InvalidValue(t *testing.T) {
 	_, err := parseFlags([]string{"-max_issue_containers", "invalid_int"})
 	if err == nil {
 		t.Error("expected error parsing invalid max_issue_containers flag, got nil")
+	}
+}
+
+func TestParseFlags_MaxConcurrencyInvalidValue(t *testing.T) {
+	_, err := parseFlags([]string{"-max-concurrency", "invalid_int"})
+	if err == nil {
+		t.Error("expected error parsing invalid max-concurrency flag, got nil")
 	}
 }
 
@@ -365,11 +384,11 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 			if cmd[2] != expectedURL {
 				t.Errorf("expected URL %q, got %q", expectedURL, cmd[2])
 			}
-			if cmd[3] != "--id" || cmd[4] != "test-repo_42" {
-				t.Errorf("expected --id test-repo_42, got %v", cmd[3:])
+			if cmd[3] != "--id" || cmd[4] != "test-repo-42" {
+				t.Errorf("expected --id test-repo-42, got %v", cmd[3:])
 			}
 		}
-		if cmd[0] == devpodExe && cmd[1] == "ssh" && cmd[2] == "test-repo_42" && cmd[3] == "--command" {
+		if cmd[0] == devpodExe && cmd[1] == "ssh" && cmd[2] == "test-repo-42" && cmd[3] == "--command" {
 			cmdStr := cmd[4]
 			if strings.Contains(cmdStr, "send-keys") && strings.Contains(cmdStr, "Take a look at the status of this issue") {
 				foundSendKeys = true
@@ -458,7 +477,7 @@ func TestRun_SkipLaunchIfAlreadyActive(t *testing.T) {
 		capturedCommands = append(capturedCommands, append([]string{name}, args...))
 		if name == "devpod" && len(args) > 0 && args[0] == "list" {
 			// Return list containing both standard and issue containers running
-			return []byte("test-repo Running\ntest-repo_42 Running\n"), nil
+			return []byte("test-repo Running\ntest-repo-42 Running\n"), nil
 		}
 		return []byte("success"), nil
 	}
@@ -498,7 +517,7 @@ func TestRun_SkipLaunchIfAlreadyActive(t *testing.T) {
 	// Verify that devpod up was NOT called for issue 42
 	for _, cmd := range capturedCommands {
 		if cmd[0] == devpodExe && cmd[1] == "up" {
-			if len(cmd) > 4 && cmd[4] == "test-repo_42" {
+			if len(cmd) > 4 && cmd[4] == "test-repo-42" {
 				t.Errorf("did not expect devpod up to be called for issue 42, but it was")
 			}
 		}
@@ -544,7 +563,7 @@ func TestRun_HibernationOfOldestContainers(t *testing.T) {
 		capturedCommands = append(capturedCommands, append([]string{name}, args...))
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			// Return list containing standard container and 3 running issue containers
-			return []byte("test-repo Running\ntest-repo_1 Running\ntest-repo_2 Running\ntest-repo_3 Running\n"), nil
+			return []byte("test-repo Running\ntest-repo-1 Running\ntest-repo-2 Running\ntest-repo-3 Running\n"), nil
 		}
 		return []byte("success"), nil
 	}
@@ -593,7 +612,7 @@ func TestRun_HibernationOfOldestContainers(t *testing.T) {
 	// Verify that devpod stop was called on the oldest running container (issue 1)
 	var stopCommandCalledForIssue1 bool
 	for _, cmd := range capturedCommands {
-		if cmd[0] == devpodExe && cmd[1] == "stop" && cmd[2] == "test-repo_1" {
+		if cmd[0] == devpodExe && cmd[1] == "stop" && cmd[2] == "test-repo-1" {
 			stopCommandCalledForIssue1 = true
 		}
 	}
@@ -642,7 +661,7 @@ func TestRun_CleanupOfClosedOrUnlabeledContainers(t *testing.T) {
 		capturedCommands = append(capturedCommands, append([]string{name}, args...))
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			// Return list containing standard container and 1 running issue container (issue 4)
-			return []byte("test-repo Running\ntest-repo_4 Running\n"), nil
+			return []byte("test-repo Running\ntest-repo-4 Running\n"), nil
 		}
 		return []byte("success"), nil
 	}
@@ -682,10 +701,10 @@ func TestRun_CleanupOfClosedOrUnlabeledContainers(t *testing.T) {
 	var stopCommandCalled bool
 	var deleteCommandCalled bool
 	for _, cmd := range capturedCommands {
-		if cmd[0] == devpodExe && cmd[1] == "stop" && cmd[2] == "test-repo_4" {
+		if cmd[0] == devpodExe && cmd[1] == "stop" && cmd[2] == "test-repo-4" {
 			stopCommandCalled = true
 		}
-		if cmd[0] == devpodExe && cmd[1] == "delete" && cmd[2] == "test-repo_4" {
+		if cmd[0] == devpodExe && cmd[1] == "delete" && cmd[2] == "test-repo-4" {
 			deleteCommandCalled = true
 		}
 	}
@@ -1079,7 +1098,7 @@ func TestRun_RecreateIssueContainerOnHashChange(t *testing.T) {
 
 	// Write an initial tracked SHA for the issue container
 	trackedSHAs := loadTrackedSHAs()
-	containerID := "test-repo_42"
+	containerID := "test-repo-42"
 	trackedSHAs[containerID] = "devcontainer.json:old_sha_123"
 	if err := saveTrackedSHAs(trackedSHAs); err != nil {
 		t.Fatalf("failed to save mock tracked SHAs: %v", err)
@@ -1128,7 +1147,7 @@ func TestRun_RecreateIssueContainerOnHashChange(t *testing.T) {
 		capturedCommands = append(capturedCommands, append([]string{name}, args...))
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			// Container is already running
-			return []byte("test-repo Running\ntest-repo_42 Running\n"), nil
+			return []byte("test-repo Running\ntest-repo-42 Running\n"), nil
 		}
 		return []byte("success"), nil
 	}
@@ -1189,22 +1208,22 @@ func TestRun_RecreateIssueContainerOnHashChange(t *testing.T) {
 	var deleted bool
 	var recreated bool
 	for _, cmd := range capturedCommands {
-		if cmd[0] == devpodExe && cmd[1] == "delete" && cmd[2] == "test-repo_42" {
+		if cmd[0] == devpodExe && cmd[1] == "delete" && cmd[2] == "test-repo-42" {
 			deleted = true
 		}
 		if cmd[0] == devpodExe && cmd[1] == "up" {
 			expectedURL := "git@github.com:test-owner/test-repo@feature/mock_feature_slug_42"
-			if len(cmd) > 2 && cmd[2] == expectedURL && cmd[4] == "test-repo_42" {
+			if len(cmd) > 2 && cmd[2] == expectedURL && cmd[4] == "test-repo-42" {
 				recreated = true
 			}
 		}
 	}
 
 	if !deleted {
-		t.Error("expected container test-repo_42 to be deleted before recreation, but it was not")
+		t.Error("expected container test-repo-42 to be deleted before recreation, but it was not")
 	}
 	if !recreated {
-		t.Error("expected container test-repo_42 to be recreated (up) with the issue branch, but it was not")
+		t.Error("expected container test-repo-42 to be recreated (up) with the issue branch, but it was not")
 	}
 
 	// Verify that tracked SHA got updated in the file
@@ -1362,4 +1381,199 @@ func TestReportStartupFailure_PreexistingIssueExists(t *testing.T) {
 		t.Error("expected create issue NOT to be called since one already exists")
 	}
 }
+
+func TestLogWithPrefixAndCommandRunner(t *testing.T) {
+	// 1. Test logWithPrefix
+	var buf bytes.Buffer
+	originalOutput := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(originalOutput)
+
+	logWithPrefix("test-owner/test-repo", "hello %s", "world")
+	logStr := buf.String()
+	if !strings.Contains(logStr, "[test-owner/test-repo] hello world") {
+		t.Errorf("expected log to contain '[test-owner/test-repo] hello world', got %q", logStr)
+	}
+
+	// 2. Test commandRunner prefixing/splitting output by line
+	buf.Reset()
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		return []byte("line1\nline2\n\nline3"), nil
+	}
+
+	out, err := runCommandWithLog("test-owner/test-repo", "some-cmd")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(out) != "line1\nline2\n\nline3" {
+		t.Errorf("expected original output, got %q", string(out))
+	}
+
+	logStr = buf.String()
+	expectedLines := []string{
+		"[test-owner/test-repo] line1",
+		"[test-owner/test-repo] line2",
+		"[test-owner/test-repo] line3",
+	}
+	for _, expected := range expectedLines {
+		if !strings.Contains(logStr, expected) {
+			t.Errorf("expected log to contain %q, got %q", expected, logStr)
+		}
+	}
+}
+
+func TestWithGitHubRetry_SuccessAfterRetry(t *testing.T) {
+	var callCount int
+	err := withGitHubRetry(context.Background(), func() (*github.Response, error) {
+		callCount++
+		if callCount < 3 {
+			resp := &github.Response{
+				Response: &http.Response{
+					StatusCode: http.StatusTooManyRequests,
+				},
+			}
+			return resp, fmt.Errorf("rate limit exceeded")
+		}
+		resp := &github.Response{
+			Response: &http.Response{
+				StatusCode: http.StatusOK,
+			},
+		}
+		return resp, nil
+	})
+
+	if err != nil {
+		t.Fatalf("expected successful execution after retries, got error: %v", err)
+	}
+	if callCount != 3 {
+		t.Errorf("expected 3 calls, got %d", callCount)
+	}
+}
+
+func TestTrackedSHAsConcurrency(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "devcontainer-manager-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	oldGetConfigDir := getConfigDir
+	getConfigDir = func() string {
+		return tempDir
+	}
+	defer func() { getConfigDir = oldGetConfigDir }()
+
+	trackedSHAs := loadTrackedSHAs()
+
+	const goroutines = 10
+	const iterations = 50
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines * 2)
+
+	for i := 0; i < goroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				repo := fmt.Sprintf("owner/repo-%d-%d", id, j)
+				updateAndSaveRepoSHA(repo, "some-sha", trackedSHAs)
+			}
+		}(i)
+
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				_ = loadTrackedSHAs()
+			}
+		}(i)
+	}
+
+	wg.Wait()
+}
+
+func TestRun_ConcurrencySemaphoreLimit(t *testing.T) {
+	// Create a temporary container list file with 5 repositories
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	repos := []string{
+		"owner/repo1",
+		"owner/repo2",
+		"owner/repo3",
+		"owner/repo4",
+		"owner/repo5",
+	}
+	for _, r := range repos {
+		if _, err := tmpFile.WriteString(r + "\n"); err != nil {
+			t.Fatalf("failed to write to temp file: %v", err)
+		}
+	}
+	tmpFile.Close()
+
+	// Use --max-concurrency = 2
+	cfg := &config{
+		once:               true,
+		containerList:      tmpFile.Name(),
+		maxConcurrency:     2,
+		maxIssueContainers: 5,
+	}
+
+	// Mock commandRunner with an artificial delay and trace concurrency
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var activeRuns int32
+	var maxActiveRuns int32
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			// devcontainers list: return empty so it tries to start all of them
+			return []byte(""), nil
+		}
+		if name == devpodExe && len(args) > 0 && args[0] == "up" {
+			currentActive := atomic.AddInt32(&activeRuns, 1)
+			defer atomic.AddInt32(&activeRuns, -1)
+
+			// Store maximum active concurrency observed
+			for {
+				max := atomic.LoadInt32(&maxActiveRuns)
+				if currentActive <= max {
+					break
+				}
+				if atomic.CompareAndSwapInt32(&maxActiveRuns, max, currentActive) {
+					break
+				}
+			}
+
+			// Simulate container bring-up delay
+			time.Sleep(50 * time.Millisecond)
+			return []byte("success"), nil
+		}
+		return []byte("success"), nil
+	}
+
+	// Disable github client to avoid network calls and bypass issue scanning
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return nil, fmt.Errorf("no gh client in this test")
+	}
+
+	err = run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	observedMax := atomic.LoadInt32(&maxActiveRuns)
+	if observedMax != 2 {
+		t.Errorf("expected max concurrency limit of 2, but observed %d concurrent runs", observedMax)
+	}
+}
+
 

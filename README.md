@@ -8,10 +8,12 @@
 
 *   **Continuous Synchronization:** Detects configuration changes in remote templates and aligns local devcontainers by rebuilding or cleaning them up.
 *   **GitHub Issue Devcontainers:** Automatically provisions dedicated devcontainers for open issues containing `seraphine` labels, handling state labels (`container-creating`, `container-ready`, `container-failed`) dynamically.
+*   **Container Prioritization:** Dynamically orders container startup operations, prioritizing repositories that have been most recently updated (pushed) on GitHub.
 *   **Deterministic Caching:** Minimizes rebuild times by storing composite SHAs of configurations and script dependencies in a state cache.
 *   **Automatic SSH Mapping:** Assigns unique SSH ports to workspaces, facilitating reverse-proxy routing via systems like `dcrouter`.
 *   **Startup Command Injection:** Polls containers via SSH until they are ready, then automatically injects execution commands into the container's active tmux session.
-*   **Robust Observability & Diagnostics:** Automatically tracks and publishes container startup logs, reporting errors back to GitHub issues when failures are encountered.
+*   **Robust Observability & Prefixed Logging:** Prepends all log messages and command outputs with a `[owner/repo]` prefix for concurrent readability. Reports startup failure logs back to GitHub issues.
+*   **GitHub API Rate Limit Retries:** Wraps GitHub API calls in a retry handler that performs exponential backoff when encountering rate limit responses (HTTP 403 or 429).
 
 ---
 
@@ -86,6 +88,7 @@ The manager supports configuration via the following command-line flags:
 | `-container_list` | `string` | `container.list.template` | The template file specifying the target Git repositories to track and manage. |
 | `-max_issue_containers`| `int` | `5` | The maximum number of concurrent issue-based devcontainers allowed to run simultaneously. |
 | `-startup_command` | `string` | `""` | A shell command to inject dynamically into the container's primary tmux session once it is active. |
+| `-max-concurrency` | `int` | `10` | The maximum number of concurrent repository processing threads/goroutines. |
 
 ---
 
@@ -98,6 +101,14 @@ DCM keeps track of the active configurations it processes to prevent redundant r
     ```bash
     rm ~/.config/devcontainer-manager/tracked_shas.json
     ```
+
+---
+
+## 🤖 Automated GitHub Workflows
+
+The repository includes pre-configured automation workflows under `.github/workflows/`:
+*   **Issue Closer Workflow (`issue-closer.yml`):** Runs every 5 minutes to automatically query GitHub's Sub-issues API, closing parent issues once all related child sub-issues are marked closed.
+*   **Assign Reviewer Workflow (`assign-reviewer.yml`):** Automatically assigns the repository owner (`brotherlogic`) as a reviewer on new pull requests once validation checks pass.
 
 ---
 
