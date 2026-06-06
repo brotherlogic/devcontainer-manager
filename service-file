@@ -13,5 +13,6 @@ RestartSec=10
 # Passes DBUS info so notify-send desktop notifications work from the background
 Environment="DISPLAY=:0"
 Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus"
+Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
 [Install]
 WantedBy=default.target
