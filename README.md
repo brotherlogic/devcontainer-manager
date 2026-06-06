@@ -1,73 +1,105 @@
 # Devcontainer Manager
 
-The manager periodically checks GitHub for updates. If it detects changes in the devcontainer configuration, it automatically deletes and recreates the container. By default, it uses `--ide none` to prevent the IDE from automatically launching, though this can be configured using the `--ide` command-line flag.
+**Devcontainer Manager (DCM)** is a daemon written in Go designed to automatically manage, run, and sync [DevPod](https://devpod.sh/) devcontainers on a Linux environment. It continuously monitors remote Git repository templates and coordinates the lifecycle of active workspaces, handling configurations, port mapping, and GitHub-integrated issue environments.
 
-*It actively synchronizes the local `container.list` with the remote `container.list.template` configuration. Any local devcontainers removed from the template will be gracefully detected and removed from the active system.*
+---
 
-cli installed for managing devcontainers and running them. Project is written in golang, using the latest standards.
+## 🚀 Key Capabilities
 
-## Configuration Tracking & Caching
-The daemon automatically tracks GitHub commits and content changes of the `.devcontainer` configuration files (`devcontainer.json` or `.devcontainer/devcontainer.json`), as well as any lifecycle scripts referenced inside them (such as `postCreateCommand`, `postStartCommand`, etc.). This tracking applies to both standard/non-issue containers and per-issue branch devcontainers (checking the configuration on their respective feature branches). This ensures existing devpod containers seamlessly restart and rebuild when configurations or their dependencies update, without unnecessary rebuilding.
+*   **Continuous Synchronization:** Detects configuration changes in remote templates and aligns local devcontainers by rebuilding or cleaning them up.
+*   **GitHub Issue Devcontainers:** Automatically provisions dedicated devcontainers for open issues containing `seraphine` labels, handling state labels (`container-creating`, `container-ready`, `container-failed`) dynamically.
+*   **Deterministic Caching:** Minimizes rebuild times by storing composite SHAs of configurations and script dependencies in a state cache.
+*   **Automatic SSH Mapping:** Assigns unique SSH ports to workspaces, facilitating reverse-proxy routing via systems like `dcrouter`.
+*   **Startup Command Injection:** Polls containers via SSH until they are ready, then automatically injects execution commands into the container's active tmux session.
+*   **Robust Observability & Diagnostics:** Automatically tracks and publishes container startup logs, reporting errors back to GitHub issues when failures are encountered.
 
-Configurations are actively tracked via a state file (`~/.config/devcontainer-manager/tracked_shas.json`) containing deterministic, composite SHAs of all tracked files. To force a hard container rebuild, simply delete this JSON file to bypass the state. Rebuilds are otherwise automatic whenever remote repository devcontainer configuration files or referenced script files are updated.
+---
 
-## Installation
+## 🛠️ Architecture & Workflow
 
-You can install the project and set it up as a systemd user service by running the provided `install.sh` script.
-
-```bash
-sudo ./install.sh
+```mermaid
+graph TD
+    A[Remote Repository] -->|1. Poll Config Changes| B(Devcontainer Manager)
+    B -->|2. Check Template & Shas| C{Rebuild Needed?}
+    C -->|Yes| D[Recreate DevPod Container]
+    C -->|No| E[Maintain State]
+    B -->|3. Read Open GitHub Issues| F{Has Seraphine Label?}
+    F -->|Yes| G[Provision Branch Devcontainer]
+    F -->|No| H[Ignore]
+    D -->|4. Map Ports & Advertise| I[mappings.json]
+    G -->|5. Inject startup_command| J[Active tmux Session]
 ```
 
-This script will:
-1. Build the binary using your regular user's `go` environment
-2. Move the built binary to `/usr/local/bin`
-3. Configure a systemd user service based on `service-file`
-4. Enable lingering for your user so that the service runs in the background even when you are not logged in
-5. Enable and start the systemd service
+---
 
-## Robust Container Renaming
-The daemon automatically ensures that the underlying Docker containers perfectly match their corresponding project names, even when multiple disjoint environments run simultaneously, by referencing their dedicated workspace IDs.
+## 📋 Prerequisites
 
-## Supported Projects
-The managed projects are defined in `container.list.template`.
+Before running the Devcontainer Manager, ensure that the following dependencies are installed and available in the daemon host's environment:
 
-## Improved Observability
-The manager now logs the full `devpod-cli up` command it executes when starting or recreating a container. This provides better visibility into the background operations and simplifies debugging of the container lifecycle.
+*   **Go** (v1.20+)
+*   **Docker** / **Podman** (underlying container provider)
+*   **DevPod CLI** (`devpod` or `devpod-cli` installed in your path)
+*   **GitHub CLI** (`gh`, authenticated to write pull requests and issue labels)
+*   **tmux** (installed inside target devcontainers to support startup command injections)
 
-## SSH for DevPod
-The manager now uses SSH repository URLs (`git@github.com:...`) instead of HTTPS shorthand when calling `devpod-cli up`. This ensures that DevPod utilizes your local SSH credentials for repository operations.
+---
 
-## Port Mapping & Discovery Support
-The manager automatically allocates a unique SSH port for each devcontainer (starting from 2222) and maps it to the container's SSH port (22) using `--provider-option DOCKER_RUN_ARGS=`. 
+## ⚙️ Installation & Setup
 
-Allocated ports are advertised by pushing a `mappings.json` file to the `brotherlogic/devcontainer-manager` repository. The manager automatically generates and registers an SSH deploy key to bypass pull request requirements for these updates. This allows tools like `dcrouter` to discover and route SSH connections to the correct container.
+### 1. Automatic systemd User Service Setup (Recommended)
+Use the included automated install script to build, configure, and register the manager as a persistent systemd user service.
 
-## Version Tracking
-The manager now prints the git SHA of the build on startup, allowing you to easily identify which version of the code is running. This information is automatically extracted from the build metadata.
+```bash
+./install.sh
+```
 
-## Container Prioritization
-The manager dynamically orders container startup operations, prioritizing repositories that have been most recently updated (pushed) on GitHub. This ensures the projects you are actively working on are spun up first.
-## Issue-Based Devcontainers & Label Tracking
-The daemon supports automatically provisioning dedicated devcontainers for open issues labeled with `seraphine` (or prefixes thereof). When it provisions these containers, it updates the GitHub issue labels to track their state:
-- `container-creating`: Added when container provisioning begins.
-- `container-ready`: Added when the container is successfully launched and ready (with `container-creating` and `container-failed` labels removed).
-- `container-failed`: Added if provisioning fails (with `container-creating` and `container-ready` labels removed).
+> [!NOTE]
+> The `install.sh` script does not require root privileges for standard setups. Running it executes the following steps:
+> 1. Compiles the binary using the local Go environment.
+> 2. Places the compiled binary under `~/.local/bin/devcontainer-manager`.
+> 3. Creates a systemd unit file at `~/.config/systemd/user/devcontainer-manager.service`.
+> 4. Configures lingering (`loginctl enable-linger`) so that the daemon runs in the background even when you are not logged in.
+> 5. Reloads systemd and enables the service to start automatically on system boot.
 
-When a container is hibernated due to hitting concurrent container limits, the labels are kept as-is. Similarly, when a container is cleaned up or deleted, the labels are left on the issue for historical record.
+To verify that the service is running successfully:
+```bash
+systemctl --user status devcontainer-manager
+```
 
-The detailed workflow and guidelines for collaborating on these issues are documented in [issues.md](file:///workspaces/devcontainer-manager/issues.md).
+### 2. Manual Startup
+For manual runs or local debugging, you can build and run the binary directly:
 
-## Startup Failure Reporting
-If a devcontainer for an issue branch fails to start (e.g. during branch creation, devpod launch, or container recreation), the manager automatically runs a background task to report the failure. It queries GitHub for any existing open issues titled `"Issue Container Startup Failed"`. If none exists, it creates a new issue with that title, applies the `seraphine-bug` label, and documents the branch name, original issue number, and startup logs/errors in the issue body.
+```bash
+go build -o devcontainer-manager main.go
+./devcontainer-manager -container_list container.list.template
+```
 
-## Dynamic Startup Commands
-The manager supports dynamically injecting a startup command or prompt into the container once it starts up or is recreated. When the `-startup_command "<command>"` flag is provided, the manager will poll the container via SSH until a `tmux` session named exactly after the container ID is ready. Once ready, the command will be sent directly to that tmux session, running it dynamically inside the persistent tmux shell.
+---
 
-## Command-Line Flags
+## ⌨️ Command-Line Interface (CLI)
 
-The daemon supports the following command-line flags:
-* `-once`: Run the check loop once and then exit immediately (default: `false`).
-* `-container_list <file>`: The path to the container template file to check (default: `container.list.template`).
-* `-max_issue_containers <count>`: The maximum number of concurrent running issue containers (default: `5`).
-* `-startup_command <command>`: A command/prompt to inject dynamically into the container's active tmux session once it is ready (default: `""`).
+The manager supports configuration via the following command-line flags:
+
+| Flag | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `-once` | `bool` | `false` | Runs the synchronization check once and exits immediately instead of polling in a loop. |
+| `-container_list` | `string` | `container.list.template` | The template file specifying the target Git repositories to track and manage. |
+| `-max_issue_containers`| `int` | `5` | The maximum number of concurrent issue-based devcontainers allowed to run simultaneously. |
+| `-startup_command` | `string` | `""` | A shell command to inject dynamically into the container's primary tmux session once it is active. |
+
+---
+
+## 💾 Caching & State Persistence
+
+DCM keeps track of the active configurations it processes to prevent redundant rebuilds:
+*   **Location:** Caches are persisted at `~/.config/devcontainer-manager/tracked_shas.json`.
+*   **Behavior:** Stores deterministic composite hashes of tracking files (`devcontainer.json`, `postCreateCommand`, etc.).
+*   **Manual Override:** If you need to force a complete rebuild of all managed containers, delete the state file:
+    ```bash
+    rm ~/.config/devcontainer-manager/tracked_shas.json
+    ```
+
+---
+
+## 🔗 Project Workflows & Contributions
+For details on the issue lifecycle, label transitions, and the AI-driven development workflows utilized in this project, refer to the [Issues Workflow Guide (issues.md)](file:///workspaces/devcontainer-manager/issues.md).
