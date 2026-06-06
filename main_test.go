@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,10 +35,14 @@ func TestParseFlags_Defaults(t *testing.T) {
 	if cfg.maxIssueContainers != 5 {
 		t.Errorf("expected maxIssueContainers to be 5, got %d", cfg.maxIssueContainers)
 	}
+
+	if cfg.maxConcurrency != 10 {
+		t.Errorf("expected maxConcurrency to be 10, got %d", cfg.maxConcurrency)
+	}
 }
 
 func TestParseFlags_ExplicitValue(t *testing.T) {
-	cfg, err := parseFlags([]string{"-max_issue_containers", "10", "-once", "-container_list", "custom.list"})
+	cfg, err := parseFlags([]string{"-max_issue_containers", "10", "-once", "-container_list", "custom.list", "-max-concurrency", "15"})
 	if err != nil {
 		t.Fatalf("unexpected error parsing flags: %v", err)
 	}
@@ -53,12 +58,23 @@ func TestParseFlags_ExplicitValue(t *testing.T) {
 	if cfg.maxIssueContainers != 10 {
 		t.Errorf("expected maxIssueContainers to be 10, got %d", cfg.maxIssueContainers)
 	}
+
+	if cfg.maxConcurrency != 15 {
+		t.Errorf("expected maxConcurrency to be 15, got %d", cfg.maxConcurrency)
+	}
 }
 
 func TestParseFlags_InvalidValue(t *testing.T) {
 	_, err := parseFlags([]string{"-max_issue_containers", "invalid_int"})
 	if err == nil {
 		t.Error("expected error parsing invalid max_issue_containers flag, got nil")
+	}
+}
+
+func TestParseFlags_MaxConcurrencyInvalidValue(t *testing.T) {
+	_, err := parseFlags([]string{"-max-concurrency", "invalid_int"})
+	if err == nil {
+		t.Error("expected error parsing invalid max-concurrency flag, got nil")
 	}
 }
 
@@ -1408,4 +1424,72 @@ func TestLogWithPrefixAndCommandRunner(t *testing.T) {
 	}
 }
 
+func TestWithGitHubRetry_SuccessAfterRetry(t *testing.T) {
+	var callCount int
+	err := withGitHubRetry(context.Background(), func() (*github.Response, error) {
+		callCount++
+		if callCount < 3 {
+			resp := &github.Response{
+				Response: &http.Response{
+					StatusCode: http.StatusTooManyRequests,
+				},
+			}
+			return resp, fmt.Errorf("rate limit exceeded")
+		}
+		resp := &github.Response{
+			Response: &http.Response{
+				StatusCode: http.StatusOK,
+			},
+		}
+		return resp, nil
+	})
+
+	if err != nil {
+		t.Fatalf("expected successful execution after retries, got error: %v", err)
+	}
+	if callCount != 3 {
+		t.Errorf("expected 3 calls, got %d", callCount)
+	}
+}
+
+func TestTrackedSHAsConcurrency(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "devcontainer-manager-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	oldGetConfigDir := getConfigDir
+	getConfigDir = func() string {
+		return tempDir
+	}
+	defer func() { getConfigDir = oldGetConfigDir }()
+
+	trackedSHAs := loadTrackedSHAs()
+
+	const goroutines = 10
+	const iterations = 50
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines * 2)
+
+	for i := 0; i < goroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				repo := fmt.Sprintf("owner/repo-%d-%d", id, j)
+				updateAndSaveRepoSHA(repo, "some-sha", trackedSHAs)
+			}
+		}(i)
+
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				_ = loadTrackedSHAs()
+			}
+		}(i)
+	}
+
+	wg.Wait()
+}
 
