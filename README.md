@@ -75,8 +75,6 @@ The repository includes an Assign Reviewer GitHub Action (`.github/workflows/ass
 
 ## GitHub API Rate Limit Retries
 The manager wraps GitHub API client calls in a retry handler that performs exponential backoff when encountering rate limit responses (secondary rate limit: HTTP 403 or 429) or standard Rate Limit/Abuse Rate Limit errors. This ensures resilient synchronization when running concurrent operations or API-heavy tasks.
-
-
 ## Command-Line Flags
 
 

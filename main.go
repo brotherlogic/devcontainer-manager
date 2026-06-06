@@ -1,5 +1,6 @@
 package main
 // Trigger PR review for assign reviewer
+// Trigger PR review for issue closer
 
 
 import (
