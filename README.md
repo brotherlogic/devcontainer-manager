@@ -78,6 +78,8 @@ go build -o devcontainer-manager main.go
 
 ---
 
+If no custom startup command is supplied via the flag, issue-specific containers will default to injecting a prompt that dynamically references the GitHub issue/bug number they were created for.
+
 ## ⌨️ Command-Line Interface (CLI)
 
 The manager supports configuration via the following command-line flags:
