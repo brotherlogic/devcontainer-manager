@@ -1099,6 +1099,8 @@ func (sd *slugDeriver) derive(ctx context.Context, title string) (string, error)
 
 var defaultDeriver = &slugDeriver{
 	runAgy: func(ctx context.Context, prompt string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
 		cmd := exec.CommandContext(ctx, "agy", "--prompt", prompt)
 		return cmd.Output()
 	},
