@@ -33,10 +33,14 @@ func TestParseFlags_Defaults(t *testing.T) {
 	if cfg.maxIssueContainers != 5 {
 		t.Errorf("expected maxIssueContainers to be 5, got %d", cfg.maxIssueContainers)
 	}
+
+	if cfg.maxConcurrency != 10 {
+		t.Errorf("expected maxConcurrency to be 10, got %d", cfg.maxConcurrency)
+	}
 }
 
 func TestParseFlags_ExplicitValue(t *testing.T) {
-	cfg, err := parseFlags([]string{"-max_issue_containers", "10", "-once", "-container_list", "custom.list"})
+	cfg, err := parseFlags([]string{"-max_issue_containers", "10", "-once", "-container_list", "custom.list", "-max-concurrency", "15"})
 	if err != nil {
 		t.Fatalf("unexpected error parsing flags: %v", err)
 	}
@@ -52,12 +56,23 @@ func TestParseFlags_ExplicitValue(t *testing.T) {
 	if cfg.maxIssueContainers != 10 {
 		t.Errorf("expected maxIssueContainers to be 10, got %d", cfg.maxIssueContainers)
 	}
+
+	if cfg.maxConcurrency != 15 {
+		t.Errorf("expected maxConcurrency to be 15, got %d", cfg.maxConcurrency)
+	}
 }
 
 func TestParseFlags_InvalidValue(t *testing.T) {
 	_, err := parseFlags([]string{"-max_issue_containers", "invalid_int"})
 	if err == nil {
 		t.Error("expected error parsing invalid max_issue_containers flag, got nil")
+	}
+}
+
+func TestParseFlags_MaxConcurrencyInvalidValue(t *testing.T) {
+	_, err := parseFlags([]string{"-max-concurrency", "invalid_int"})
+	if err == nil {
+		t.Error("expected error parsing invalid max-concurrency flag, got nil")
 	}
 }
 

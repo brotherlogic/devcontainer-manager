@@ -82,3 +82,4 @@ The daemon supports the following command-line flags:
 * `-container_list <file>`: The path to the container template file to check (default: `container.list.template`).
 * `-max_issue_containers <count>`: The maximum number of concurrent running issue containers (default: `5`).
 * `-startup_command <command>`: A command/prompt to inject dynamically into the container's active tmux session once it is ready (default: `""`).
+* `-max-concurrency <count>`: The maximum number of concurrent repository processing threads/goroutines (default: `10`).
