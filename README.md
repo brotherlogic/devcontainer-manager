@@ -48,6 +48,9 @@ The manager now prints the git SHA of the build on startup, allowing you to easi
 
 ## Container Prioritization
 The manager dynamically orders container startup operations, prioritizing repositories that have been most recently updated (pushed) on GitHub. This ensures the projects you are actively working on are spun up first.
+## Prefixed & Split Logging
+To ensure readability when multiple devcontainers are managed concurrently, all log messages and command runner outputs are prepended with the repository identifier prefix `[owner/repo]`. Multi-line command runner outputs are automatically split by line and logged using this prefix.
+
 ## Issue-Based Devcontainers & Label Tracking
 The daemon supports automatically provisioning dedicated devcontainers for open issues labeled with `seraphine` (or prefixes thereof). When it provisions these containers, it updates the GitHub issue labels to track their state:
 - `container-creating`: Added when container provisioning begins.
@@ -64,10 +67,20 @@ If a devcontainer for an issue branch fails to start (e.g. during branch creatio
 ## Dynamic Startup Commands
 The manager supports dynamically injecting a startup command or prompt into the container once it starts up or is recreated. When the `-startup_command "<command>"` flag is provided, the manager will poll the container via SSH until a `tmux` session named exactly after the container ID is ready. Once ready, the command will be sent directly to that tmux session, running it dynamically inside the persistent tmux shell.
 
+## Issue Closer Workflow
+The repository includes an Issue Closer GitHub Action (`.github/workflows/issue-closer.yml`) which runs every 5 minutes. It automatically queries GitHub's native Sub-issues API for open issues and closes parent issues if all of their sub-issues are closed.
+
+## Assign Reviewer Workflow
+The repository includes an Assign Reviewer GitHub Action (`.github/workflows/assign-reviewer.yml`) which runs upon successful completion of the `Validate PR` workflow. It automatically assigns the repository owner (`brotherlogic`) as a reviewer on the pull request.
+
+## GitHub API Rate Limit Retries
+The manager wraps GitHub API client calls in a retry handler that performs exponential backoff when encountering rate limit responses (secondary rate limit: HTTP 403 or 429) or standard Rate Limit/Abuse Rate Limit errors. This ensures resilient synchronization when running concurrent operations or API-heavy tasks.
 ## Command-Line Flags
+
 
 The daemon supports the following command-line flags:
 * `-once`: Run the check loop once and then exit immediately (default: `false`).
 * `-container_list <file>`: The path to the container template file to check (default: `container.list.template`).
 * `-max_issue_containers <count>`: The maximum number of concurrent running issue containers (default: `5`).
 * `-startup_command <command>`: A command/prompt to inject dynamically into the container's active tmux session once it is ready (default: `""`).
+* `-max-concurrency <count>`: The maximum number of concurrent repository processing threads/goroutines (default: `10`).
