@@ -1363,3 +1363,32 @@ func TestReportStartupFailure_PreexistingIssueExists(t *testing.T) {
 	}
 }
 
+func TestWithGitHubRetry_SuccessAfterRetry(t *testing.T) {
+	var callCount int
+	err := withGitHubRetry(context.Background(), func() (*github.Response, error) {
+		callCount++
+		if callCount < 3 {
+			resp := &github.Response{
+				Response: &http.Response{
+					StatusCode: http.StatusTooManyRequests,
+				},
+			}
+			return resp, fmt.Errorf("rate limit exceeded")
+		}
+		resp := &github.Response{
+			Response: &http.Response{
+				StatusCode: http.StatusOK,
+			},
+		}
+		return resp, nil
+	})
+
+	if err != nil {
+		t.Fatalf("expected successful execution after retries, got error: %v", err)
+	}
+	if callCount != 3 {
+		t.Errorf("expected 3 calls, got %d", callCount)
+	}
+}
+
+

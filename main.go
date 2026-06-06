@@ -1326,4 +1326,53 @@ func reportStartupFailure(ctx context.Context, client *github.Client, owner, rep
 	}
 }
 
+func withGitHubRetry(ctx context.Context, f func() (*github.Response, error)) error {
+	backoff := 100 * time.Millisecond
+	maxBackoff := 10 * time.Second
+	maxRetries := 5
+
+	for i := 0; i < maxRetries; i++ {
+		resp, err := f()
+		if err == nil {
+			return nil
+		}
+
+		isRateLimit := false
+		if resp != nil && resp.Response != nil {
+			status := resp.Response.StatusCode
+			if status == http.StatusForbidden || status == http.StatusTooManyRequests {
+				isRateLimit = true
+			}
+		}
+
+		if _, ok := err.(*github.RateLimitError); ok {
+			isRateLimit = true
+		}
+		if _, ok := err.(*github.AbuseRateLimitError); ok {
+			isRateLimit = true
+		}
+
+		if !isRateLimit {
+			return err
+		}
+
+		log.Printf("GitHub API rate limit encountered (attempt %d/%d). Retrying in %v...", i+1, maxRetries, backoff)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
+
+	_, err := f()
+	return err
+}
+
+
 
