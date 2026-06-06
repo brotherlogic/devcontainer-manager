@@ -287,7 +287,7 @@ func run(ctx context.Context, cfg *config) error {
 								renameDockerContainer(containerID)
 								cmdToInject := cfg.startupCommand
 								if cmdToInject == "" {
-									cmdToInject = defaultIssueStartupCommand
+									cmdToInject = fmt.Sprintf(`agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of issue #%d - if there's associated information in the ISSUES.md file, follow those instructions. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`, issueNumber)
 								}
 								wg.Add(1)
 								go func(cid string) {
@@ -987,7 +987,18 @@ func recreateIssueContainer(ctx context.Context, owner, repoName, branchName, co
 
 	cmdToInject := startupCmd
 	if cmdToInject == "" {
-		cmdToInject = defaultIssueStartupCommand
+		issueNum := 0
+		parts := strings.Split(containerID, "_")
+		if len(parts) > 0 {
+			if num, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
+				issueNum = num
+			}
+		}
+		if issueNum > 0 {
+			cmdToInject = fmt.Sprintf(`agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of issue #%d - if there's associated information in the ISSUES.md file, follow those instructions. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`, issueNum)
+		} else {
+			cmdToInject = defaultIssueStartupCommand
+		}
 	}
 	wg.Add(1)
 	go func() {

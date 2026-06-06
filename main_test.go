@@ -371,7 +371,7 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 		}
 		if cmd[0] == devpodExe && cmd[1] == "ssh" && cmd[2] == "test-repo_42" && cmd[3] == "--command" {
 			cmdStr := cmd[4]
-			if strings.Contains(cmdStr, "send-keys") && strings.Contains(cmdStr, "Take a look at the status of this issue") {
+			if strings.Contains(cmdStr, "send-keys") && strings.Contains(cmdStr, "Take a look at the status of issue #42") {
 				foundSendKeys = true
 			}
 		}
@@ -1188,6 +1188,7 @@ func TestRun_RecreateIssueContainerOnHashChange(t *testing.T) {
 	// Verify that the container was recreated (deleted and launched again)
 	var deleted bool
 	var recreated bool
+	var foundSendKeys bool
 	for _, cmd := range capturedCommands {
 		if cmd[0] == devpodExe && cmd[1] == "delete" && cmd[2] == "test-repo_42" {
 			deleted = true
@@ -1198,6 +1199,12 @@ func TestRun_RecreateIssueContainerOnHashChange(t *testing.T) {
 				recreated = true
 			}
 		}
+		if cmd[0] == devpodExe && cmd[1] == "ssh" && cmd[2] == "test-repo_42" && cmd[3] == "--command" {
+			cmdStr := cmd[4]
+			if strings.Contains(cmdStr, "send-keys") && strings.Contains(cmdStr, "Take a look at the status of issue #42") {
+				foundSendKeys = true
+			}
+		}
 	}
 
 	if !deleted {
@@ -1205,6 +1212,9 @@ func TestRun_RecreateIssueContainerOnHashChange(t *testing.T) {
 	}
 	if !recreated {
 		t.Error("expected container test-repo_42 to be recreated (up) with the issue branch, but it was not")
+	}
+	if !foundSendKeys {
+		t.Error("expected dynamic issue startup command with issue #42 to be injected during recreation, but it was not")
 	}
 
 	// Verify that tracked SHA got updated in the file
