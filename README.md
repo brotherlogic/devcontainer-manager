@@ -64,6 +64,9 @@ If a devcontainer for an issue branch fails to start (e.g. during branch creatio
 ## Dynamic Startup Commands
 The manager supports dynamically injecting a startup command or prompt into the container once it starts up or is recreated. When the `-startup_command "<command>"` flag is provided, the manager will poll the container via SSH until a `tmux` session named exactly after the container ID is ready. Once ready, the command will be sent directly to that tmux session, running it dynamically inside the persistent tmux shell.
 
+## Issue Closer Workflow
+The repository includes an Issue Closer GitHub Action (`.github/workflows/issue-closer.yml`) which runs every 5 minutes. It automatically queries GitHub's native Sub-issues API for open issues and closes parent issues if all of their sub-issues are closed.
+
 ## Command-Line Flags
 
 The daemon supports the following command-line flags:
