@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -21,8 +22,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/brotherlogic/devcontainer-manager/proto"
+	"github.com/brotherlogic/devcontainer-manager/server"
 	"github.com/google/go-github/v50/github"
 	"golang.org/x/oauth2"
+	"google.golang.org/grpc"
 )
 
 func getGHClient() (*github.Client, error) {
@@ -84,6 +88,74 @@ type config struct {
 	maxIssueContainers int
 	startupCommand     string
 	maxConcurrency     int
+	port               int
+}
+
+var globalCache = server.NewCache()
+
+func initCache() *server.Cache {
+	return globalCache
+}
+
+func startGRPCServer(port int, cache *server.Cache) (*grpc.Server, error) {
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return nil, fmt.Errorf("failed to listen: %w", err)
+	}
+	s := grpc.NewServer()
+	proto.RegisterDashboardServiceServer(s, server.NewServer(cache))
+	go func() {
+		if err := s.Serve(lis); err != nil {
+			log.Printf("gRPC server stopped: %v", err)
+		}
+	}()
+	return s, nil
+}
+
+func syncCacheWithRunning(running map[string]bool) {
+	// 1. For each running container, make sure it is in the cache as RUNNING (if not already STARTING/RUNNING)
+	for cid := range running {
+		existing := globalCache.List()
+		var found *proto.Container
+		for _, c := range existing {
+			if c.Id == cid {
+				found = c
+				break
+			}
+		}
+
+		if found != nil {
+			if found.Status != proto.ContainerStatus_RUNNING && found.Status != proto.ContainerStatus_STARTING {
+				found.Status = proto.ContainerStatus_RUNNING
+				found.LastActiveTimestamp = time.Now().Unix()
+				globalCache.Update(cid, found)
+			}
+		} else {
+			// Not in cache, let's try to infer repo url and branch
+			repoURL := ""
+			branchOrIssue := ""
+			// If cid contains a dash and the part after the dash is a number, it's likely an issue container
+			if idx := strings.LastIndex(cid, "-"); idx != -1 {
+				if _, err := strconv.Atoi(cid[idx+1:]); err == nil {
+					branchOrIssue = cid[idx+1:]
+				}
+			}
+			globalCache.Update(cid, &proto.Container{
+				Id:                  cid,
+				RepositoryUrl:       repoURL,
+				BranchOrIssue:       branchOrIssue,
+				Status:              proto.ContainerStatus_RUNNING,
+				LastActiveTimestamp: time.Now().Unix(),
+			})
+		}
+	}
+
+	// 2. Remove containers from cache that are NOT in devpod list and not in STARTING status
+	for _, c := range globalCache.List() {
+		if !running[c.Id] && c.Status != proto.ContainerStatus_STARTING {
+			globalCache.Delete(c.Id)
+		}
+	}
 }
 
 func parseFlags(args []string) (*config, error) {
@@ -93,6 +165,7 @@ func parseFlags(args []string) (*config, error) {
 	maxIssueContainers := fs.Int("max_issue_containers", 5, "Maximum number of concurrent running issue containers")
 	startupCommand := fs.String("startup_command", "", "Command to inject into the container's tmux session on startup")
 	maxConcurrency := fs.Int("max-concurrency", 10, "Maximum concurrency limit")
+	port := fs.Int("port", 50051, "The port to run the gRPC server on")
 
 	err := fs.Parse(args)
 	if err != nil {
@@ -110,6 +183,7 @@ func parseFlags(args []string) (*config, error) {
 		maxIssueContainers: *maxIssueContainers,
 		startupCommand:     startupCmdVal,
 		maxConcurrency:     *maxConcurrency,
+		port:               *port,
 	}, nil
 }
 
@@ -119,6 +193,16 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
 		os.Exit(1)
 	}
+
+	port := cfg.port
+	if port <= 0 {
+		port = 50051
+	}
+	srv, err := startGRPCServer(port, globalCache)
+	if err != nil {
+		log.Fatalf("Failed to start gRPC server: %v", err)
+	}
+	defer srv.GracefulStop()
 
 	for {
 		err := run(context.Background(), cfg)
@@ -175,6 +259,7 @@ func run(ctx context.Context, cfg *config) error {
 			running[fields[0]] = true
 		}
 	}
+	syncCacheWithRunning(running)
 
 	trackedSHAs := loadTrackedSHAs()
 	trackedSHAsChanged := false
@@ -215,10 +300,32 @@ func run(ctx context.Context, cfg *config) error {
 
 			if !isAlreadyRunning {
 				logWithPrefix(repo, "Starting devcontainer")
+				globalCache.Update(id, &proto.Container{
+					Id:                  id,
+					RepositoryUrl:       fmt.Sprintf("git@github.com:%s", repo),
+					BranchOrIssue:       defaultBranchRef,
+					Status:              proto.ContainerStatus_STARTING,
+					LastActiveTimestamp: time.Now().Unix(),
+				})
 				out, err := runCommandWithLog(repo, devpodExe, "up", fmt.Sprintf("git@github.com:%s", repo), "--id", id, "--ide", "none")
 				if err != nil {
 					logWithPrefix(repo, "Failed to start devcontainer: %v (output: %s)", err, string(out))
+					globalCache.Update(id, &proto.Container{
+						Id:                  id,
+						RepositoryUrl:       fmt.Sprintf("git@github.com:%s", repo),
+						BranchOrIssue:       defaultBranchRef,
+						Status:              proto.ContainerStatus_FAILED,
+						LastActiveTimestamp: time.Now().Unix(),
+						ErrorMessage:        err.Error(),
+					})
 				} else {
+					globalCache.Update(id, &proto.Container{
+						Id:                  id,
+						RepositoryUrl:       fmt.Sprintf("git@github.com:%s", repo),
+						BranchOrIssue:       defaultBranchRef,
+						Status:              proto.ContainerStatus_RUNNING,
+						LastActiveTimestamp: time.Now().Unix(),
+					})
 					if cfg.startupCommand != "" {
 						wg.Add(1)
 						go func(cid string) {
@@ -318,12 +425,34 @@ func run(ctx context.Context, cfg *config) error {
 
 								repoURL := fmt.Sprintf("git@github.com:%s/%s@%s", owner, repoName, branchName)
 								logWithPrefix(repo, "Launching issue container %s on branch %s", containerID, branchName)
+								globalCache.Update(containerID, &proto.Container{
+									Id:                  containerID,
+									RepositoryUrl:       repoURL,
+									BranchOrIssue:       branchName,
+									Status:              proto.ContainerStatus_STARTING,
+									LastActiveTimestamp: time.Now().Unix(),
+								})
 								out, err := runCommandWithLog(repo, devpodExe, "up", repoURL, "--id", containerID, "--ide", "none")
 								if err != nil {
 									logWithPrefix(repo, "Failed to launch devcontainer for issue %d: %v (output: %s)", issueNumber, err, string(out))
+									globalCache.Update(containerID, &proto.Container{
+										Id:                  containerID,
+										RepositoryUrl:       repoURL,
+										BranchOrIssue:       branchName,
+										Status:              proto.ContainerStatus_FAILED,
+										LastActiveTimestamp: time.Now().Unix(),
+										ErrorMessage:        err.Error(),
+									})
 									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
 									go reportStartupFailure(ctx, client, owner, repoName, branchName, issueNumber, err, string(out))
 								} else {
+									globalCache.Update(containerID, &proto.Container{
+										Id:                  containerID,
+										RepositoryUrl:       repoURL,
+										BranchOrIssue:       branchName,
+										Status:              proto.ContainerStatus_RUNNING,
+										LastActiveTimestamp: time.Now().Unix(),
+									})
 									stateMu.Lock()
 									running[containerID] = true
 									stateMu.Unlock()
@@ -585,6 +714,7 @@ func deleteContainer(repo, id string) error {
 		return fmt.Errorf("%s delete failed: %w (output: %s)", devpodExe, err, string(deleteOut))
 	}
 
+	globalCache.Delete(id)
 	logWithPrefix(repo, "Successfully deleted devcontainer %s", id)
 	return nil
 }
@@ -1032,10 +1162,32 @@ func recreateContainer(ctx context.Context, repo string, id string, startupCmd s
 	if err := deleteContainer(repo, id); err != nil {
 		logWithPrefix(repo, "Warning: failed to delete container %s before recreating: %v", id, err)
 	}
+	globalCache.Update(id, &proto.Container{
+		Id:                  id,
+		RepositoryUrl:       fmt.Sprintf("git@github.com:%s", repo),
+		BranchOrIssue:       defaultBranchRef,
+		Status:              proto.ContainerStatus_STARTING,
+		LastActiveTimestamp: time.Now().Unix(),
+	})
 	out, err := runCommandWithLog(repo, devpodExe, "up", fmt.Sprintf("git@github.com:%s", repo), "--id", id, "--ide", "none")
 	if err != nil {
+		globalCache.Update(id, &proto.Container{
+			Id:                  id,
+			RepositoryUrl:       fmt.Sprintf("git@github.com:%s", repo),
+			BranchOrIssue:       defaultBranchRef,
+			Status:              proto.ContainerStatus_FAILED,
+			LastActiveTimestamp: time.Now().Unix(),
+			ErrorMessage:        err.Error(),
+		})
 		return fmt.Errorf("%s up failed: %w (output: %s)", devpodExe, err, string(out))
 	}
+	globalCache.Update(id, &proto.Container{
+		Id:                  id,
+		RepositoryUrl:       fmt.Sprintf("git@github.com:%s", repo),
+		BranchOrIssue:       defaultBranchRef,
+		Status:              proto.ContainerStatus_RUNNING,
+		LastActiveTimestamp: time.Now().Unix(),
+	})
 	logWithPrefix(repo, "Successfully recreated devcontainer")
 	renameDockerContainer(id)
 	if startupCmd != "" {
@@ -1057,10 +1209,32 @@ func recreateIssueContainer(ctx context.Context, owner, repoName, branchName, co
 		logWithPrefix(repo, "Warning: failed to delete container %s before recreating: %v", containerID, err)
 	}
 	repoURL := fmt.Sprintf("git@github.com:%s/%s@%s", owner, repoName, branchName)
+	globalCache.Update(containerID, &proto.Container{
+		Id:                  containerID,
+		RepositoryUrl:       repoURL,
+		BranchOrIssue:       branchName,
+		Status:              proto.ContainerStatus_STARTING,
+		LastActiveTimestamp: time.Now().Unix(),
+	})
 	out, err := runCommandWithLog(repo, devpodExe, "up", repoURL, "--id", containerID, "--ide", "none")
 	if err != nil {
+		globalCache.Update(containerID, &proto.Container{
+			Id:                  containerID,
+			RepositoryUrl:       repoURL,
+			BranchOrIssue:       branchName,
+			Status:              proto.ContainerStatus_FAILED,
+			LastActiveTimestamp: time.Now().Unix(),
+			ErrorMessage:        err.Error(),
+		})
 		return fmt.Errorf("%s up failed: %w (output: %s)", devpodExe, err, string(out))
 	}
+	globalCache.Update(containerID, &proto.Container{
+		Id:                  containerID,
+		RepositoryUrl:       repoURL,
+		BranchOrIssue:       branchName,
+		Status:              proto.ContainerStatus_RUNNING,
+		LastActiveTimestamp: time.Now().Unix(),
+	})
 	logWithPrefix(repo, "Successfully recreated devcontainer for issue container %s", containerID)
 	renameDockerContainer(containerID)
 

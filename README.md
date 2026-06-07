@@ -91,6 +91,7 @@ The manager supports configuration via the following command-line flags:
 | `-max_issue_containers`| `int` | `5` | The maximum number of concurrent issue-based devcontainers allowed to run simultaneously. |
 | `-startup_command` | `string` | `""` | A shell command to inject dynamically into the container's primary tmux session once it is active. |
 | `-max-concurrency` | `int` | `10` | The maximum number of concurrent repository processing threads/goroutines. |
+| `-port` | `int` | `50051` | The port to run the gRPC dashboard service on. |
 
 ---
 
@@ -103,6 +104,12 @@ DCM keeps track of the active configurations it processes to prevent redundant r
     ```bash
     rm ~/.config/devcontainer-manager/tracked_shas.json
     ```
+
+## 📊 gRPC Dashboard Service
+
+DCM hosts a gRPC service implementing `DashboardService` defined in `proto/dashboard.proto`. This service provides:
+*   **ListContainers RPC:** Retrieves a list of active devcontainers with their metadata, including ID, Repository URL, Branch or Issue number, current Lifecycle Status (`STARTING`, `RUNNING`, `FAILED`), last active timestamp, and error messages (if applicable).
+*   **Thread-Safe In-Memory Status Cache:** The state is updated in real-time as devcontainers transition through different lifecycle stages, and is periodically synchronized with the actual running containers on the host.
 
 ---
 
