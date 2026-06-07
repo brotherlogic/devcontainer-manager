@@ -1162,32 +1162,29 @@ func recreateContainer(ctx context.Context, repo string, id string, startupCmd s
 	if err := deleteContainer(repo, id); err != nil {
 		logWithPrefix(repo, "Warning: failed to delete container %s before recreating: %v", id, err)
 	}
-	globalCache.Update(id, &proto.Container{
+
+	container := &proto.Container{
 		Id:                  id,
 		RepositoryUrl:       fmt.Sprintf("git@github.com:%s", repo),
 		BranchOrIssue:       defaultBranchRef,
 		Status:              proto.ContainerStatus_STARTING,
 		LastActiveTimestamp: time.Now().Unix(),
-	})
+	}
+	globalCache.Update(id, container)
+
 	out, err := runCommandWithLog(repo, devpodExe, "up", fmt.Sprintf("git@github.com:%s", repo), "--id", id, "--ide", "none")
 	if err != nil {
-		globalCache.Update(id, &proto.Container{
-			Id:                  id,
-			RepositoryUrl:       fmt.Sprintf("git@github.com:%s", repo),
-			BranchOrIssue:       defaultBranchRef,
-			Status:              proto.ContainerStatus_FAILED,
-			LastActiveTimestamp: time.Now().Unix(),
-			ErrorMessage:        err.Error(),
-		})
+		container.Status = proto.ContainerStatus_FAILED
+		container.LastActiveTimestamp = time.Now().Unix()
+		container.ErrorMessage = err.Error()
+		globalCache.Update(id, container)
 		return fmt.Errorf("%s up failed: %w (output: %s)", devpodExe, err, string(out))
 	}
-	globalCache.Update(id, &proto.Container{
-		Id:                  id,
-		RepositoryUrl:       fmt.Sprintf("git@github.com:%s", repo),
-		BranchOrIssue:       defaultBranchRef,
-		Status:              proto.ContainerStatus_RUNNING,
-		LastActiveTimestamp: time.Now().Unix(),
-	})
+
+	container.Status = proto.ContainerStatus_RUNNING
+	container.LastActiveTimestamp = time.Now().Unix()
+	globalCache.Update(id, container)
+
 	logWithPrefix(repo, "Successfully recreated devcontainer")
 	renameDockerContainer(id)
 	if startupCmd != "" {
@@ -1209,32 +1206,29 @@ func recreateIssueContainer(ctx context.Context, owner, repoName, branchName, co
 		logWithPrefix(repo, "Warning: failed to delete container %s before recreating: %v", containerID, err)
 	}
 	repoURL := fmt.Sprintf("git@github.com:%s/%s@%s", owner, repoName, branchName)
-	globalCache.Update(containerID, &proto.Container{
+
+	container := &proto.Container{
 		Id:                  containerID,
 		RepositoryUrl:       repoURL,
 		BranchOrIssue:       branchName,
 		Status:              proto.ContainerStatus_STARTING,
 		LastActiveTimestamp: time.Now().Unix(),
-	})
+	}
+	globalCache.Update(containerID, container)
+
 	out, err := runCommandWithLog(repo, devpodExe, "up", repoURL, "--id", containerID, "--ide", "none")
 	if err != nil {
-		globalCache.Update(containerID, &proto.Container{
-			Id:                  containerID,
-			RepositoryUrl:       repoURL,
-			BranchOrIssue:       branchName,
-			Status:              proto.ContainerStatus_FAILED,
-			LastActiveTimestamp: time.Now().Unix(),
-			ErrorMessage:        err.Error(),
-		})
+		container.Status = proto.ContainerStatus_FAILED
+		container.LastActiveTimestamp = time.Now().Unix()
+		container.ErrorMessage = err.Error()
+		globalCache.Update(containerID, container)
 		return fmt.Errorf("%s up failed: %w (output: %s)", devpodExe, err, string(out))
 	}
-	globalCache.Update(containerID, &proto.Container{
-		Id:                  containerID,
-		RepositoryUrl:       repoURL,
-		BranchOrIssue:       branchName,
-		Status:              proto.ContainerStatus_RUNNING,
-		LastActiveTimestamp: time.Now().Unix(),
-	})
+
+	container.Status = proto.ContainerStatus_RUNNING
+	container.LastActiveTimestamp = time.Now().Unix()
+	globalCache.Update(containerID, container)
+
 	logWithPrefix(repo, "Successfully recreated devcontainer for issue container %s", containerID)
 	renameDockerContainer(containerID)
 
