@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package dashboard;
+option go_package = "github.com/brotherlogic/devcontainer-manager/proto";
+
+service DashboardService {
+  rpc ListContainers (ListContainersRequest) returns (ListContainersResponse);
+}
+
+message ListContainersRequest {}
+
+message ListContainersResponse {
+  repeated Container containers = 1;
+}
+
+enum ContainerStatus {
+  UNKNOWN = 0;
+  STARTING = 1;
+  RUNNING = 2;
+  FAILED = 3;
+}
+
+message Container {
+  string id = 1;
+  string repository_url = 2;
+  string branch_or_issue = 3;
+  ContainerStatus status = 4;
+  int64 last_active_timestamp = 5; // Unix timestamp
+  string error_message = 6;
+}
