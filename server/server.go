@@ -27,6 +27,13 @@ func (c *Cache) Update(id string, container *proto.Container) {
 	c.containers[id] = container
 }
 
+// Delete removes a container status from the cache by its ID.
+func (c *Cache) Delete(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.containers, id)
+}
+
 // List returns a slice of all container statuses stored in the cache.
 func (c *Cache) List() []*proto.Container {
 	c.mu.RLock()
