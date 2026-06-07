@@ -13,5 +13,5 @@ func TestProtoTypesExist(t *testing.T) {
 	var container proto.Container
 	var status proto.ContainerStatus = proto.ContainerStatus_RUNNING
 
-	t.Logf("Proto types loaded successfully: req=%T, resp=%T, container=%T, status=%v", req, resp, container, status)
+	t.Logf("Proto types loaded successfully: req=%T, resp=%T, container=%T, status=%v", &req, &resp, &container, status)
 }
