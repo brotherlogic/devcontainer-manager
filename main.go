@@ -91,6 +91,7 @@ type config struct {
 	port               int
 }
 
+// globalCache is a thread-safe in-memory cache protected by sync.RWMutex inside package server.
 var globalCache = server.NewCache()
 
 func initCache() *server.Cache {
@@ -300,32 +301,26 @@ func run(ctx context.Context, cfg *config) error {
 
 			if !isAlreadyRunning {
 				logWithPrefix(repo, "Starting devcontainer")
-				globalCache.Update(id, &proto.Container{
+				container := &proto.Container{
 					Id:                  id,
 					RepositoryUrl:       fmt.Sprintf("git@github.com:%s", repo),
 					BranchOrIssue:       defaultBranchRef,
 					Status:              proto.ContainerStatus_STARTING,
 					LastActiveTimestamp: time.Now().Unix(),
-				})
+				}
+				globalCache.Update(id, container)
+
 				out, err := runCommandWithLog(repo, devpodExe, "up", fmt.Sprintf("git@github.com:%s", repo), "--id", id, "--ide", "none")
 				if err != nil {
 					logWithPrefix(repo, "Failed to start devcontainer: %v (output: %s)", err, string(out))
-					globalCache.Update(id, &proto.Container{
-						Id:                  id,
-						RepositoryUrl:       fmt.Sprintf("git@github.com:%s", repo),
-						BranchOrIssue:       defaultBranchRef,
-						Status:              proto.ContainerStatus_FAILED,
-						LastActiveTimestamp: time.Now().Unix(),
-						ErrorMessage:        err.Error(),
-					})
+					container.Status = proto.ContainerStatus_FAILED
+					container.LastActiveTimestamp = time.Now().Unix()
+					container.ErrorMessage = err.Error()
+					globalCache.Update(id, container)
 				} else {
-					globalCache.Update(id, &proto.Container{
-						Id:                  id,
-						RepositoryUrl:       fmt.Sprintf("git@github.com:%s", repo),
-						BranchOrIssue:       defaultBranchRef,
-						Status:              proto.ContainerStatus_RUNNING,
-						LastActiveTimestamp: time.Now().Unix(),
-					})
+					container.Status = proto.ContainerStatus_RUNNING
+					container.LastActiveTimestamp = time.Now().Unix()
+					globalCache.Update(id, container)
 					if cfg.startupCommand != "" {
 						wg.Add(1)
 						go func(cid string) {
@@ -425,34 +420,28 @@ func run(ctx context.Context, cfg *config) error {
 
 								repoURL := fmt.Sprintf("git@github.com:%s/%s@%s", owner, repoName, branchName)
 								logWithPrefix(repo, "Launching issue container %s on branch %s", containerID, branchName)
-								globalCache.Update(containerID, &proto.Container{
+								container := &proto.Container{
 									Id:                  containerID,
 									RepositoryUrl:       repoURL,
 									BranchOrIssue:       branchName,
 									Status:              proto.ContainerStatus_STARTING,
 									LastActiveTimestamp: time.Now().Unix(),
-								})
+								}
+								globalCache.Update(containerID, container)
+
 								out, err := runCommandWithLog(repo, devpodExe, "up", repoURL, "--id", containerID, "--ide", "none")
 								if err != nil {
 									logWithPrefix(repo, "Failed to launch devcontainer for issue %d: %v (output: %s)", issueNumber, err, string(out))
-									globalCache.Update(containerID, &proto.Container{
-										Id:                  containerID,
-										RepositoryUrl:       repoURL,
-										BranchOrIssue:       branchName,
-										Status:              proto.ContainerStatus_FAILED,
-										LastActiveTimestamp: time.Now().Unix(),
-										ErrorMessage:        err.Error(),
-									})
+									container.Status = proto.ContainerStatus_FAILED
+									container.LastActiveTimestamp = time.Now().Unix()
+									container.ErrorMessage = err.Error()
+									globalCache.Update(containerID, container)
 									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
 									go reportStartupFailure(ctx, client, owner, repoName, branchName, issueNumber, err, string(out))
 								} else {
-									globalCache.Update(containerID, &proto.Container{
-										Id:                  containerID,
-										RepositoryUrl:       repoURL,
-										BranchOrIssue:       branchName,
-										Status:              proto.ContainerStatus_RUNNING,
-										LastActiveTimestamp: time.Now().Unix(),
-									})
+									container.Status = proto.ContainerStatus_RUNNING
+									container.LastActiveTimestamp = time.Now().Unix()
+									globalCache.Update(containerID, container)
 									stateMu.Lock()
 									running[containerID] = true
 									stateMu.Unlock()
