@@ -76,7 +76,7 @@ var (
 
 // We live dangerously
 const (
-	defaultIssueStartupCommand = `agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of this issue - if there's associated information in the ISSUES.md file, follow those instructions. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`
+	defaultIssueStartupCommand = `agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of this issue - if there's associated information in the ISSUES.md file, follow those instructions and begin work immediately. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`
 	defaultBranchRef           = ""
 	DevpodLabelPrefix          = "sh.loft.devpod.workspace.id="
 	VscLabelPrefix             = "dev.containers.id="
@@ -450,7 +450,7 @@ func run(ctx context.Context, cfg *config) error {
 									renameDockerContainer(containerID)
 									cmdToInject := cfg.startupCommand
 									if cmdToInject == "" {
-										cmdToInject = fmt.Sprintf(`agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of issue #%d - if there's associated information in the ISSUES.md file, follow those instructions. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`, issueNumber)
+										cmdToInject = fmt.Sprintf(`agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of issue #%d - if there's associated information in the ISSUES.md file, follow those instructions and begin work immediately. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`, issueNumber)
 									}
 									wg.Add(1)
 									go func(cid string) {
@@ -1231,7 +1231,7 @@ func recreateIssueContainer(ctx context.Context, owner, repoName, branchName, co
 			}
 		}
 		if issueNum > 0 {
-			cmdToInject = fmt.Sprintf(`agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of issue #%d - if there's associated information in the ISSUES.md file, follow those instructions. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`, issueNum)
+			cmdToInject = fmt.Sprintf(`agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of issue #%d - if there's associated information in the ISSUES.md file, follow those instructions and begin work immediately. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`, issueNum)
 		} else {
 			cmdToInject = defaultIssueStartupCommand
 		}
