@@ -79,7 +79,7 @@ var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, ow
 				Name string `json:"name"`
 			} `json:"labels"`
 		}
-		if err := json.Unmarshal(out, &rawIssues); err == nil {
+		if errUnmarshal := json.Unmarshal(out, &rawIssues); errUnmarshal == nil {
 			var issues []*github.Issue
 			for _, raw := range rawIssues {
 				num := raw.Number
@@ -98,15 +98,20 @@ var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, ow
 				})
 			}
 			return issues, nil
+		} else {
+			log.Printf("Warning: failed to parse JSON from gh issue list for %s: %v. Raw output: %s", repoPath, errUnmarshal, string(out))
 		}
+	} else {
+		log.Printf("Warning: gh issue list command failed for %s: %v. Output: %s", repoPath, err, string(out))
 	}
 
 	if client != nil {
+		log.Printf("Falling back to GitHub HTTP API to list open issues for %s", repoPath)
 		opts := &github.IssueListByRepoOptions{State: "open"}
-		issues, _, err := client.Issues.ListByRepo(ctx, owner, repoName, opts)
-		return issues, err
+		issues, _, errAPI := client.Issues.ListByRepo(ctx, owner, repoName, opts)
+		return issues, errAPI
 	}
-	return nil, fmt.Errorf("gh command failed and github client is nil: %w", err)
+	return nil, fmt.Errorf("gh command failed (%w) and github client is nil", err)
 }
 
 var (
