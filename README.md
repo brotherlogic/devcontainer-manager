@@ -41,7 +41,7 @@ Before running the Devcontainer Manager, ensure that the following dependencies 
 *   **Go** (v1.20+)
 *   **Docker** / **Podman** (underlying container provider)
 *   **DevPod CLI** (`devpod` or `devpod-cli` installed in your path)
-*   **GitHub CLI** (`gh`, authenticated to write pull requests and issue labels)
+*   **GitHub CLI** (`gh`, authenticated to list issues, write pull requests, and manage issue labels)
 *   **tmux** (installed inside target devcontainers to support startup command injections)
 
 ---

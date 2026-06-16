@@ -68,6 +68,47 @@ var commandRunner = func(name string, args ...string) ([]byte, error) {
 
 var gitHubClientProvider = getGHClient
 
+var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, owner, repoName string) ([]*github.Issue, error) {
+	repoPath := fmt.Sprintf("%s/%s", owner, repoName)
+	out, err := commandRunner("gh", "issue", "list", "-R", repoPath, "--state", "open", "--json", "number,title,labels")
+	if err == nil {
+		var rawIssues []struct {
+			Number int    `json:"number"`
+			Title  string `json:"title"`
+			Labels []struct {
+				Name string `json:"name"`
+			} `json:"labels"`
+		}
+		if err := json.Unmarshal(out, &rawIssues); err == nil {
+			var issues []*github.Issue
+			for _, raw := range rawIssues {
+				num := raw.Number
+				title := raw.Title
+				var labels []*github.Label
+				for _, lbl := range raw.Labels {
+					name := lbl.Name
+					labels = append(labels, &github.Label{
+						Name: &name,
+					})
+				}
+				issues = append(issues, &github.Issue{
+					Number: &num,
+					Title:  &title,
+					Labels: labels,
+				})
+			}
+			return issues, nil
+		}
+	}
+
+	if client != nil {
+		opts := &github.IssueListByRepoOptions{State: "open"}
+		issues, _, err := client.Issues.ListByRepo(ctx, owner, repoName, opts)
+		return issues, err
+	}
+	return nil, fmt.Errorf("gh command failed and github client is nil: %w", err)
+}
+
 var (
 	pollingInterval = 5 * time.Second
 	pollingTimeout  = 5 * time.Minute
@@ -371,8 +412,7 @@ func run(ctx context.Context, cfg *config) error {
 				parts := strings.Split(repo, "/")
 				if len(parts) == 2 {
 					owner, repoName := parts[0], parts[1]
-					opts := &github.IssueListByRepoOptions{State: "open"}
-					issues, _, err := client.Issues.ListByRepo(ctx, owner, repoName, opts)
+					issues, err := listOpenIssuesProvider(ctx, client, owner, repoName)
 					if err != nil {
 						log.Printf("Warning: failed to list issues for %s: %v", repo, err)
 					} else {
@@ -1553,10 +1593,7 @@ func reportStartupFailure(ctx context.Context, client *github.Client, owner, rep
 		return
 	}
 
-	opts := &github.IssueListByRepoOptions{
-		State: "open",
-	}
-	issues, _, err := client.Issues.ListByRepo(ctx, owner, repo, opts)
+	issues, err := listOpenIssuesProvider(ctx, client, owner, repo)
 	if err != nil {
 		log.Printf("Warning: failed to list issues for %s/%s during startup failure reporting: %v", owner, repo, err)
 		return

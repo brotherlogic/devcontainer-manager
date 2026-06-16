@@ -1586,4 +1586,65 @@ func TestRun_ConcurrencySemaphoreLimit(t *testing.T) {
 	}
 }
 
+func TestListOpenIssuesProvider_Success(t *testing.T) {
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	mockJSON := `[
+		{
+			"number": 169,
+			"title": "Use gh tool to list open issues rather than pulling from http",
+			"labels": [
+				{"name": "container-ready"},
+				{"name": "seraphine-bug"}
+			]
+		}
+	]`
+
+	var commandName string
+	var commandArgs []string
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		commandName = name
+		commandArgs = args
+		return []byte(mockJSON), nil
+	}
+
+	issues, err := listOpenIssuesProvider(context.Background(), nil, "brotherlogic", "devcontainer-manager")
+	if err != nil {
+		t.Fatalf("listOpenIssuesProvider failed: %v", err)
+	}
+
+	if commandName != "gh" {
+		t.Errorf("expected commandName 'gh', got '%s'", commandName)
+	}
+
+	expectedArgs := []string{"issue", "list", "-R", "brotherlogic/devcontainer-manager", "--state", "open", "--json", "number,title,labels"}
+	if len(commandArgs) != len(expectedArgs) {
+		t.Fatalf("expected %d args, got %d", len(expectedArgs), len(commandArgs))
+	}
+	for i, v := range expectedArgs {
+		if commandArgs[i] != v {
+			t.Errorf("arg %d: expected '%s', got '%s'", i, v, commandArgs[i])
+		}
+	}
+
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 issue, got %d", len(issues))
+	}
+	if issues[0].GetNumber() != 169 {
+		t.Errorf("expected issue number 169, got %d", issues[0].GetNumber())
+	}
+	if issues[0].GetTitle() != "Use gh tool to list open issues rather than pulling from http" {
+		t.Errorf("unexpected title: %s", issues[0].GetTitle())
+	}
+	if len(issues[0].Labels) != 2 {
+		t.Fatalf("expected 2 labels, got %d", len(issues[0].Labels))
+	}
+	if issues[0].Labels[0].GetName() != "container-ready" || issues[0].Labels[1].GetName() != "seraphine-bug" {
+		t.Errorf("unexpected labels: %v", issues[0].Labels)
+	}
+}
+
+
 
