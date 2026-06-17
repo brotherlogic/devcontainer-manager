@@ -12,6 +12,7 @@
 *   **Deterministic Caching:** Minimizes rebuild times by storing composite SHAs of configurations and script dependencies in a state cache.
 *   **Automatic SSH Mapping:** Assigns unique SSH ports to workspaces, facilitating reverse-proxy routing via systems like `dcrouter`.
 *   **Startup Command Injection:** Polls containers via SSH until they are ready, then automatically injects execution commands into the container's active tmux session.
+*   **Robust Command Timeouts:** Prevents standard output pipe leaks from background tasks from deadlocking the issue provisioning loops.
 *   **Robust Observability & Prefixed Logging:** Prepends all log messages and command outputs with a `[owner/repo]` prefix for concurrent readability. Reports startup failure logs back to GitHub issues.
 *   **GitHub API Rate Limit Retries:** Wraps GitHub API calls in a retry handler that performs exponential backoff when encountering rate limit responses (HTTP 403 or 429).
 

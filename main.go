@@ -1394,6 +1394,7 @@ var defaultDeriver = &slugDeriver{
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "agy", "--prompt", prompt)
+		cmd.WaitDelay = time.Second
 		return cmd.Output()
 	},
 }
