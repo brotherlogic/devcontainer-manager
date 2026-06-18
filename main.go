@@ -614,15 +614,9 @@ func run(ctx context.Context, cfg *config) error {
 
 			for _, w := range workspaces {
 				id := w.ID
-				lastIdx := strings.LastIndex(id, "-")
-				if lastIdx == -1 {
-					log.Printf("Debug: Skipping devpod %s: ID does not contain a hyphen for issue number separation", id)
-					continue
-				}
-				projectID := id[:lastIdx]
-				issueNumber, errNum := strconv.Atoi(id[lastIdx+1:])
+				projectID, issueNumber, errNum := parseWorkspaceID(id)
 				if errNum != nil {
-					log.Printf("Debug: Skipping devpod %s: Failed to parse issue number from ID '%s': %v", id, id[lastIdx+1:], errNum)
+					log.Printf("Debug: Skipping devpod %s: %v", id, errNum)
 					continue
 				}
 				repo := projectRepoMap[projectID]
@@ -662,12 +656,9 @@ func run(ctx context.Context, cfg *config) error {
 			// 2. Cleanup Logic
 			for _, w := range workspaces {
 				id := w.ID
-				lastIdx := strings.LastIndex(id, "-")
-				if lastIdx != -1 {
-					projectID := id[:lastIdx]
-					issueNumber, errNum := strconv.Atoi(id[lastIdx+1:])
-					repo := projectRepoMap[projectID]
-					if errNum == nil && repo != "" {
+				projectID, issueNumber, errNum := parseWorkspaceID(id)
+				repo := projectRepoMap[projectID]
+				if errNum == nil && repo != "" {
 						partsRepo := strings.Split(repo, "/")
 						if len(partsRepo) == 2 {
 							owner, repoName := partsRepo[0], partsRepo[1]
@@ -712,7 +703,6 @@ func run(ctx context.Context, cfg *config) error {
 						}
 					}
 				}
-			}
 			}
 		}
 
@@ -1651,6 +1641,19 @@ func runCommandWithLog(repo string, name string, args ...string) ([]byte, error)
 		}
 	}
 	return out, err
+}
+
+func parseWorkspaceID(id string) (projectID string, issueNumber int, err error) {
+	lastIdx := strings.LastIndex(id, "-")
+	if lastIdx == -1 {
+		return "", 0, fmt.Errorf("ID does not contain a hyphen: %s", id)
+	}
+	projectID = id[:lastIdx]
+	issueNumber, err = strconv.Atoi(id[lastIdx+1:])
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to parse issue number from ID '%s': %w", id[lastIdx+1:], err)
+	}
+	return projectID, issueNumber, nil
 }
 
 func getRepoForID(id string, projectRepoMap map[string]string) string {
