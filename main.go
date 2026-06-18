@@ -1716,3 +1716,29 @@ func withGitHubRetry(ctx context.Context, f func() (*github.Response, error)) er
 	return err
 }
 
+func postLatencyComment(ctx context.Context, client *github.Client, owner, repo string, issueNum int, createdAt time.Time) error {
+	latency := time.Since(createdAt)
+
+	comments, _, err := client.Issues.ListComments(ctx, owner, repo, issueNum, nil)
+	if err != nil {
+		log.Printf("Error listing comments for issue %d: %v", issueNum, err)
+		return err
+	}
+
+	for _, comment := range comments {
+		if comment.Body != nil && strings.Contains(*comment.Body, "devcontainer-startup-latency") {
+			return nil
+		}
+	}
+
+	body := fmt.Sprintf("devcontainer-startup-latency: %v", latency)
+	newComment := &github.IssueComment{Body: &body}
+	_, _, err = client.Issues.CreateComment(ctx, owner, repo, issueNum, newComment)
+	if err != nil {
+		log.Printf("Error creating comment for issue %d: %v", issueNum, err)
+		return err
+	}
+
+	log.Printf("Logged metric devcontainer-startup-latency for issue %d: %v", issueNum, latency)
+	return nil
+}

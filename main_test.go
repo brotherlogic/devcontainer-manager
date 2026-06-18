@@ -1646,5 +1646,63 @@ func TestListOpenIssuesProvider_Success(t *testing.T) {
 	}
 }
 
+func TestPostLatencyComment_AlreadyExists(t *testing.T) {
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
 
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
 
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/1/comments", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `[{"body": "This has devcontainer-startup-latency info"}]`)
+			return
+		}
+		if r.Method == "POST" {
+			t.Errorf("expected no POST request")
+		}
+	})
+
+	err := postLatencyComment(context.Background(), client, "test-owner", "test-repo", 1, time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPostLatencyComment_CreatesNew(t *testing.T) {
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	postCalled := false
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/1/comments", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `[{"body": "Other comment"}]`)
+			return
+		}
+		if r.Method == "POST" {
+			postCalled = true
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"id": 123}`)
+			return
+		}
+	})
+
+	err := postLatencyComment(context.Background(), client, "test-owner", "test-repo", 1, time.Now().Add(-5*time.Minute))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !postCalled {
+		t.Errorf("expected POST request to create comment")
+	}
+}
