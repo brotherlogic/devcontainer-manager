@@ -66,6 +66,26 @@ var commandRunner = func(name string, args ...string) ([]byte, error) {
 	return cmd.CombinedOutput()
 }
 
+type DevpodWorkspace struct {
+	ID     string `json:"id"`
+	UID    string `json:"uid"`
+	Source struct {
+		GitRepository string `json:"gitRepository"`
+	} `json:"source"`
+}
+
+func listDevpodWorkspaces() ([]DevpodWorkspace, error) {
+	out, err := commandRunner(devpodExe, "list", "--output", "json")
+	if err != nil {
+		return nil, err
+	}
+	var workspaces []DevpodWorkspace
+	if err := json.Unmarshal(out, &workspaces); err != nil {
+		return nil, fmt.Errorf("failed to parse devpod list json: %w", err)
+	}
+	return workspaces, nil
+}
+
 var gitHubClientProvider = getGHClient
 
 var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, owner, repoName string) ([]*github.Issue, error) {
@@ -294,17 +314,14 @@ func run(ctx context.Context, cfg *config) error {
 	}
 
 	// Get running devcontainers
-	out, err := commandRunner(devpodExe, "list")
+	workspaces, err := listDevpodWorkspaces()
 	if err != nil {
 		return fmt.Errorf("failed to list devcontainers: %w", err)
 	}
 
 	running := make(map[string]bool)
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) > 0 {
-			running[fields[0]] = true
-		}
+	for _, w := range workspaces {
+		running[w.ID] = true
 	}
 	syncCacheWithRunning(running)
 
@@ -560,16 +577,8 @@ func run(ctx context.Context, cfg *config) error {
 			projectRepoMap[pID] = repo
 		}
 
-		outList, errList := commandRunner(devpodExe, "list")
+		workspaces, errList := listDevpodWorkspaces()
 		if errList == nil {
-			containerStates := make(map[string]string)
-			for _, line := range strings.Split(string(outList), "\n") {
-				fields := strings.Fields(line)
-				if len(fields) > 1 {
-					containerStates[fields[0]] = fields[1]
-				}
-			}
-
 			// 1. Hibernation Logic
 			type issueContainer struct {
 				id        string
@@ -578,25 +587,24 @@ func run(ctx context.Context, cfg *config) error {
 			}
 			var runningIssues []issueContainer
 
-			for id, state := range containerStates {
-				if state == "Running" {
-					lastIdx := strings.LastIndex(id, "-")
-					if lastIdx != -1 {
-						projectID := id[:lastIdx]
-						issueNumber, errNum := strconv.Atoi(id[lastIdx+1:])
-						repo := projectRepoMap[projectID]
-						if errNum == nil && repo != "" {
-							partsRepo := strings.Split(repo, "/")
-							if len(partsRepo) == 2 {
-								owner, repoName := partsRepo[0], partsRepo[1]
-								issue, _, errGet := client.Issues.Get(ctx, owner, repoName, issueNumber)
-								if errGet == nil {
-									runningIssues = append(runningIssues, issueContainer{
-										id:        id,
-										repo:      repo,
-										updatedAt: issue.GetUpdatedAt().Time,
-									})
-								}
+			for _, w := range workspaces {
+				id := w.ID
+				lastIdx := strings.LastIndex(id, "-")
+				if lastIdx != -1 {
+					projectID := id[:lastIdx]
+					issueNumber, errNum := strconv.Atoi(id[lastIdx+1:])
+					repo := projectRepoMap[projectID]
+					if errNum == nil && repo != "" {
+						partsRepo := strings.Split(repo, "/")
+						if len(partsRepo) == 2 {
+							owner, repoName := partsRepo[0], partsRepo[1]
+							issue, _, errGet := client.Issues.Get(ctx, owner, repoName, issueNumber)
+							if errGet == nil {
+								runningIssues = append(runningIssues, issueContainer{
+									id:        id,
+									repo:      repo,
+									updatedAt: issue.GetUpdatedAt().Time,
+								})
 							}
 						}
 					}
@@ -619,7 +627,8 @@ func run(ctx context.Context, cfg *config) error {
 			}
 
 			// 2. Cleanup Logic
-			for id := range containerStates {
+			for _, w := range workspaces {
+				id := w.ID
 				lastIdx := strings.LastIndex(id, "-")
 				if lastIdx != -1 {
 					projectID := id[:lastIdx]
@@ -675,7 +684,7 @@ func run(ctx context.Context, cfg *config) error {
 		}
 
 	// 3. Extra Cleanup Logic for (a) not in template list (accounting for issues), and (b) use HTTP source
-	listOut, listErr := commandRunner(devpodExe, "list")
+	workspaces, listErr := listDevpodWorkspaces()
 	if listErr == nil {
 		validProjectNames := make(map[string]bool)
 		for _, r := range repos {
@@ -683,21 +692,15 @@ func run(ctx context.Context, cfg *config) error {
 			validProjectNames[rParts[len(rParts)-1]] = true
 		}
 
-		for _, line := range strings.Split(string(listOut), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "-") || strings.Contains(line, "NAME") {
-				continue
-			}
-			parts := strings.Split(line, "|")
-			if len(parts) >= 2 {
-				cName := strings.TrimSpace(parts[0])
-				cSource := strings.TrimSpace(parts[1])
-				if cName != "" {
-					// Check (b): Uses HTTP source
-					isHTTPSource := strings.Contains(cSource, "https://github.com/") || strings.Contains(cSource, "http://") || strings.Contains(cSource, "https://")
+		for _, w := range workspaces {
+			cName := w.ID
+			cSource := w.Source.GitRepository
+			if cName != "" {
+				// Check (b): Uses HTTP source
+				isHTTPSource := strings.Contains(cSource, "https://github.com/") || strings.Contains(cSource, "http://") || strings.Contains(cSource, "https://")
 
-					// Check (a): Not in the container list (accounting for issues)
-					inList := validProjectNames[cName] || validIssueContainers[cName]
+				// Check (a): Not in the container list (accounting for issues)
+				inList := validProjectNames[cName] || validIssueContainers[cName]
 
 					if !inList || isHTTPSource {
 						cRepo := getRepoForID(cName, projectRepoMap)
@@ -719,7 +722,6 @@ func run(ctx context.Context, cfg *config) error {
 				}
 			}
 		}
-	}
 
 	if trackedSHAsChanged {
 		if errSave := saveTrackedSHAs(trackedSHAs); errSave != nil {
@@ -1494,7 +1496,26 @@ func adjustIssueLabels(ctx context.Context, client *github.Client, owner, repo s
 func renameDockerContainer(containerID string) {
 	log.Printf("Attempting to rename docker container to %s...", containerID)
 
-	out, err := commandRunner("docker", "ps", "--format", "{{.ID}}|{{.Names}}|{{.Image}}|{{.Labels}}")
+	workspaces, err := listDevpodWorkspaces()
+	if err != nil {
+		log.Printf("Error fetching devpod workspaces: %v", err)
+		return
+	}
+
+	var targetUid string
+	for _, w := range workspaces {
+		if w.ID == containerID {
+			targetUid = w.UID
+			break
+		}
+	}
+
+	if targetUid == "" {
+		log.Printf("Could not find devpod workspace uid for %s", containerID)
+		return
+	}
+
+	out, err := commandRunner("docker", "ps", "--format", "{{.ID}}|{{.Names}}|{{.Labels}}")
 	if err != nil {
 		log.Printf("Error running docker ps: %v", err)
 		return
@@ -1508,69 +1529,11 @@ func renameDockerContainer(containerID string) {
 			continue
 		}
 		parts := strings.Split(line, "|")
-		if len(parts) >= 4 {
-			id, name, labels := parts[0], parts[1], parts[3]
-			if strings.Contains(labels, fmt.Sprintf("%s%s", DevpodLabelPrefix, containerID)) ||
-				strings.Contains(labels, fmt.Sprintf("%s%s", VscLabelPrefix, containerID)) {
+		if len(parts) >= 3 {
+			id, name, labels := parts[0], parts[1], parts[2]
+			if strings.Contains(labels, fmt.Sprintf("dev.containers.id=%s", targetUid)) {
 				targetID, currentName = id, name
 				break
-			}
-		}
-	}
-
-	if targetID == "" {
-		for _, line := range lines {
-			if line == "" {
-				continue
-			}
-			parts := strings.Split(line, "|")
-			if len(parts) >= 4 {
-				id, name, labels := parts[0], parts[1], parts[3]
-				if name == containerID {
-					// Only use name match if it doesn't explicitly belong to another workspace
-					if !strings.Contains(labels, DevpodLabelPrefix) && !strings.Contains(labels, VscLabelPrefix) {
-						targetID, currentName = id, name
-						break
-					}
-				}
-			}
-		}
-	}
-
-	if targetID == "" {
-		for _, line := range lines {
-			if line == "" {
-				continue
-			}
-			parts := strings.Split(line, "|")
-			if len(parts) >= 4 {
-				id, name, image, labels := parts[0], parts[1], parts[2], parts[3]
-				if strings.Contains(labels, DevpodLabelPrefix) || strings.Contains(labels, VscLabelPrefix) {
-					continue
-				}
-				if strings.Contains(image, "devpod-") && name != containerID {
-					targetID, currentName = id, name
-					break
-				}
-			}
-		}
-	}
-
-	if targetID == "" {
-		for _, line := range lines {
-			if line == "" {
-				continue
-			}
-			parts := strings.Split(line, "|")
-			if len(parts) >= 4 {
-				id, name, image, labels := parts[0], parts[1], parts[2], parts[3]
-				if strings.Contains(labels, DevpodLabelPrefix) || strings.Contains(labels, VscLabelPrefix) {
-					continue
-				}
-				if strings.Contains(image, "vsc-content") && name != containerID {
-					targetID, currentName = id, name
-					break
-				}
 			}
 		}
 	}
@@ -1588,7 +1551,7 @@ func renameDockerContainer(containerID string) {
 			log.Printf("Successfully renamed container to %s", containerID)
 		}
 	} else {
-		log.Printf("Could not identify which container to rename for %s", containerID)
+		log.Printf("Could not identify which docker container corresponds to devpod uid %s for %s", targetUid, containerID)
 	}
 }
 
