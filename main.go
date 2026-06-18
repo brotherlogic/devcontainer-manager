@@ -73,6 +73,9 @@ type DevpodWorkspace struct {
 	Source struct {
 		GitRepository string `json:"gitRepository"`
 	} `json:"source"`
+	Provider struct {
+		Name string `json:"name"`
+	} `json:"provider"`
 }
 
 func listDevpodWorkspaces() ([]DevpodWorkspace, error) {
@@ -84,7 +87,28 @@ func listDevpodWorkspaces() ([]DevpodWorkspace, error) {
 	if err := json.Unmarshal(out, &workspaces); err != nil {
 		return nil, fmt.Errorf("failed to parse devpod list json: %w", err)
 	}
-	return workspaces, nil
+
+	dockerOut, err := commandRunner("docker", "ps", "--format", "{{.Labels}}")
+	if err != nil {
+		log.Printf("Warning: failed to run docker ps for cross-referencing: %v", err)
+		return workspaces, nil
+	}
+	
+	runningLabels := string(dockerOut)
+	var verifiedWorkspaces []DevpodWorkspace
+	for _, w := range workspaces {
+		if w.Provider.Name == "" || w.Provider.Name == "docker" {
+			if strings.Contains(runningLabels, fmt.Sprintf("dev.containers.id=%s", w.UID)) {
+				verifiedWorkspaces = append(verifiedWorkspaces, w)
+			} else {
+				log.Printf("Debug: Workspace %s exists in devpod but Docker container is missing. Filtering out.", w.ID)
+			}
+		} else {
+			verifiedWorkspaces = append(verifiedWorkspaces, w)
+		}
+	}
+
+	return verifiedWorkspaces, nil
 }
 
 var gitHubClientProvider = getGHClient

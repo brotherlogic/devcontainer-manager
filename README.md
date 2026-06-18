@@ -7,6 +7,7 @@
 ## 🚀 Key Capabilities
 
 *   **Continuous Synchronization:** Detects configuration changes in remote templates and aligns local devcontainers by rebuilding or cleaning them up.
+*   **Robust State Tracking:** Cross-references `devpod list` output with running Docker containers to avoid getting stuck on missing or orphaned workspaces.
 *   **GitHub Issue Devcontainers:** Automatically provisions dedicated devcontainers for open issues containing `seraphine` labels, handling state labels (`container-creating`, `container-ready`, `container-failed`) dynamically.
 *   **Container Prioritization:** Dynamically orders container startup operations, prioritizing repositories that have been most recently updated (pushed) on GitHub.
 *   **Deterministic Caching:** Minimizes rebuild times by storing composite SHAs of configurations and script dependencies in a state cache.
