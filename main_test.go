@@ -1725,3 +1725,177 @@ func TestPostLatencyComment_CreatesNew(t *testing.T) {
 		t.Errorf("expected POST request to create comment")
 	}
 }
+
+func TestRun_SkipLatencyCommentIfAlreadyPosted(t *testing.T) {
+	// Create a temporary container list file
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("test-owner/test-repo\n"); err != nil {
+		t.Fatalf("failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	// Mock HTTP server
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	// Inject getGitHubClient provider
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+
+	// Override polling times for test speed
+	oldInterval := pollingInterval
+	oldTimeout := pollingTimeout
+	pollingInterval = 1 * time.Millisecond
+	pollingTimeout = 100 * time.Millisecond
+	defer func() {
+		pollingInterval = oldInterval
+		pollingTimeout = oldTimeout
+	}()
+
+	// Mock commandRunner
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			return []byte("test-repo Running\n"), nil
+		}
+		return []byte("success"), nil
+	}
+
+	// Mock agy command slug derivation
+	originalDeriverRunAgy := defaultDeriver.runAgy
+	defer func() { defaultDeriver.runAgy = originalDeriverRunAgy }()
+	defaultDeriver.runAgy = func(ctx context.Context, prompt string) ([]byte, error) {
+		return []byte("mock_feature_slug"), nil
+	}
+
+	// Setup GitHub API mock responses
+	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `[{"number": 42, "title": "My Awesome Feature", "labels": [{"name": "seraphine-feature"}], "created_at": "2023-01-01T00:00:00Z"}]`)
+	})
+
+	var latencyCommentPosted bool
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/42/comments", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			// Return a comment indicating latency was already posted
+			fmt.Fprint(w, `[{"body": "devcontainer-startup-latency: 4m"}]`)
+		} else if r.Method == http.MethodPost {
+			latencyCommentPosted = true
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{}`)
+		}
+	})
+
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"number": 42, "title": "My Awesome Feature", "labels": [{"name": "seraphine-feature"}]}`)
+		} else if r.Method == http.MethodPost || r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `[]`)
+		}
+	})
+
+	mux.HandleFunc("/repos/test-owner/test-repo/git/ref/heads/feature/mock_feature_slug_42", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"ref": "refs/heads/feature/mock_feature_slug_42", "object": {"sha": "latest_sha"}}`)
+	})
+
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	cfg := &config{
+		once:               true,
+		containerList:      tmpFile.Name(),
+		maxIssueContainers: 5,
+	}
+
+	err = run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if latencyCommentPosted {
+		t.Errorf("expected no latency comment to be posted since it already exists, but one was posted")
+	}
+}
+
+func TestRun_GitHubAPIError_NoCrash(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("test-owner/test-repo\n"); err != nil {
+		t.Fatalf("failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		return []byte("success"), nil
+	}
+
+	// Always return 500 error from API
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `{"message": "Internal Server Error"}`)
+	})
+
+	cfg := &config{
+		once:               true,
+		containerList:      tmpFile.Name(),
+		maxIssueContainers: 5,
+	}
+
+	// Should not panic, and may or may not return error depending on how main loop handles it
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("run() paniced on GitHub API error: %v", r)
+		}
+	}()
+
+	run(context.Background(), cfg)
+}
