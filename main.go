@@ -492,6 +492,16 @@ func run(ctx context.Context, cfg *config) error {
 									stateMu.Unlock()
 
 									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-ready", []string{"container-creating", "container-failed"})
+
+									if issue.CreatedAt != nil {
+										wg.Add(1)
+										go func(iNum int, t time.Time) {
+											defer wg.Done()
+											if err := postLatencyComment(ctx, client, owner, repoName, iNum, t); err != nil {
+												logWithPrefix(repo, "Warning: failed to post latency comment for issue %d: %v", iNum, err)
+											}
+										}(issueNumber, issue.CreatedAt.Time)
+									}
 									renameDockerContainer(containerID)
 									cmdToInject := cfg.startupCommand
 									if cmdToInject == "" {

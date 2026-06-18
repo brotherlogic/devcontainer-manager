@@ -303,9 +303,24 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 			{
 				"number": 42,
 				"title": "My Awesome Feature",
-				"labels": [{"name": "seraphine-feature"}]
+				"labels": [{"name": "seraphine-feature"}],
+				"created_at": "2023-01-01T00:00:00Z"
 			}
 		]`)
+	})
+
+	var latencyCommentPosted bool
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/42/comments", func(w http.ResponseWriter, r *http.Request) {
+		t.Logf("Mock GitHub API: %s %s called", r.Method, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `[]`)
+		} else if r.Method == http.MethodPost {
+			latencyCommentPosted = true
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{}`)
+		}
 	})
 
 	var currentLabels = map[string]bool{
@@ -428,6 +443,10 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 	}
 	if !foundCreatingDelete {
 		t.Errorf("expected 'container-creating' label to be deleted during ready transition, but deletes were: %v", labelDeletes)
+	}
+
+	if !latencyCommentPosted {
+		t.Errorf("expected latency comment to be posted upon successful provisioning, but it was not")
 	}
 }
 
