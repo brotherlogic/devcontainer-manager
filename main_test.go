@@ -975,12 +975,17 @@ func TestRun_ScanAndLaunchIssueContainer_Failure(t *testing.T) {
 	originalCommandRunner := commandRunner
 	defer func() { commandRunner = originalCommandRunner }()
 
+	var deleteCalled bool
 	commandRunner = func(name string, args ...string) ([]byte, error) {
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			return []byte("test-repo Running\n"), nil
 		}
 		if name == devpodExe && len(args) > 0 && args[0] == "up" {
 			return []byte("failed to start container"), fmt.Errorf("up failed")
+		}
+		if name == devpodExe && len(args) > 0 && args[0] == "delete" {
+			deleteCalled = true
+			return []byte("success"), nil
 		}
 		return []byte("success"), nil
 	}
@@ -1091,6 +1096,10 @@ func TestRun_ScanAndLaunchIssueContainer_Failure(t *testing.T) {
 	}
 	if !foundCreatingDelete {
 		t.Errorf("expected 'container-creating' label to be deleted on failure transition, got %v", labelDeletes)
+	}
+
+	if !deleteCalled {
+		t.Errorf("expected delete to be called on failure")
 	}
 }
 
