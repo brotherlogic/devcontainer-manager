@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -590,22 +591,30 @@ func run(ctx context.Context, cfg *config) error {
 			for _, w := range workspaces {
 				id := w.ID
 				lastIdx := strings.LastIndex(id, "-")
-				if lastIdx != -1 {
-					projectID := id[:lastIdx]
-					issueNumber, errNum := strconv.Atoi(id[lastIdx+1:])
-					repo := projectRepoMap[projectID]
-					if errNum == nil && repo != "" {
-						partsRepo := strings.Split(repo, "/")
-						if len(partsRepo) == 2 {
-							owner, repoName := partsRepo[0], partsRepo[1]
-							issue, _, errGet := client.Issues.Get(ctx, owner, repoName, issueNumber)
-							if errGet == nil {
-								runningIssues = append(runningIssues, issueContainer{
-									id:        id,
-									repo:      repo,
-									updatedAt: issue.GetUpdatedAt().Time,
-								})
-							}
+				if lastIdx == -1 {
+					log.Printf("Debug: Skipping devpod %s: ID does not contain a hyphen for issue number separation", id)
+					continue
+				}
+				projectID := id[:lastIdx]
+				issueNumber, errNum := strconv.Atoi(id[lastIdx+1:])
+				if errNum != nil {
+					log.Printf("Debug: Skipping devpod %s: Failed to parse issue number from ID '%s': %v", id, id[lastIdx+1:], errNum)
+					continue
+				}
+				repo := projectRepoMap[projectID]
+				if repo != "" {
+					partsRepo := strings.Split(repo, "/")
+					if len(partsRepo) == 2 {
+						owner, repoName := partsRepo[0], partsRepo[1]
+						issue, _, errGet := client.Issues.Get(ctx, owner, repoName, issueNumber)
+						if errGet == nil {
+							runningIssues = append(runningIssues, issueContainer{
+								id:        id,
+								repo:      repo,
+								updatedAt: issue.GetUpdatedAt().Time,
+							})
+						} else {
+							log.Printf("Debug: Skipping devpod %s: Failed to get issue %d from %s: %v", id, issueNumber, repo, errGet)
 						}
 					}
 				}
@@ -697,7 +706,8 @@ func run(ctx context.Context, cfg *config) error {
 			cSource := w.Source.GitRepository
 			if cName != "" {
 				// Check (b): Uses HTTP source
-				isHTTPSource := strings.Contains(cSource, "https://github.com/") || strings.Contains(cSource, "http://") || strings.Contains(cSource, "https://")
+				u, errURL := url.Parse(cSource)
+				isHTTPSource := errURL == nil && (u.Scheme == "http" || u.Scheme == "https")
 
 				// Check (a): Not in the container list (accounting for issues)
 				inList := validProjectNames[cName] || validIssueContainers[cName]
@@ -1493,8 +1503,8 @@ func adjustIssueLabels(ctx context.Context, client *github.Client, owner, repo s
 	}
 }
 
-func renameDockerContainer(containerID string) {
-	log.Printf("Attempting to rename docker container to %s...", containerID)
+func renameDockerContainer(workspaceID string) {
+	log.Printf("Attempting to rename docker container to %s...", workspaceID)
 
 	workspaces, err := listDevpodWorkspaces()
 	if err != nil {
@@ -1504,14 +1514,14 @@ func renameDockerContainer(containerID string) {
 
 	var targetUid string
 	for _, w := range workspaces {
-		if w.ID == containerID {
+		if w.ID == workspaceID {
 			targetUid = w.UID
 			break
 		}
 	}
 
 	if targetUid == "" {
-		log.Printf("Could not find devpod workspace uid for %s", containerID)
+		log.Printf("Could not find devpod workspace uid for %s", workspaceID)
 		return
 	}
 
@@ -1539,19 +1549,19 @@ func renameDockerContainer(containerID string) {
 	}
 
 	if targetID != "" {
-		if currentName == containerID {
-			log.Printf("Container %s is already named %s", targetID, containerID)
+		if currentName == workspaceID {
+			log.Printf("Container %s is already named %s", targetID, workspaceID)
 			return
 		}
 
-		log.Printf("Renaming container %s (currently %s) to %s", targetID, currentName, containerID)
-		if _, err := commandRunner("docker", "rename", targetID, containerID); err != nil {
+		log.Printf("Renaming container %s (currently %s) to %s", targetID, currentName, workspaceID)
+		if _, err := commandRunner("docker", "rename", targetID, workspaceID); err != nil {
 			log.Printf("Failed to rename container: %v", err)
 		} else {
-			log.Printf("Successfully renamed container to %s", containerID)
+			log.Printf("Successfully renamed container to %s", workspaceID)
 		}
 	} else {
-		log.Printf("Could not identify which docker container corresponds to devpod uid %s for %s", targetUid, containerID)
+		log.Printf("Could not identify which docker container corresponds to devpod uid %s for %s", targetUid, workspaceID)
 	}
 }
 
