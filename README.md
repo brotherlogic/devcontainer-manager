@@ -15,7 +15,7 @@
 *   **Robust Command Timeouts:** Prevents standard output pipe leaks from background tasks from deadlocking the issue provisioning loops.
 *   **Robust Observability & Prefixed Logging:** Prepends all log messages and command outputs with a `[owner/repo]` prefix for concurrent readability. Reports startup failure logs back to GitHub issues.
 *   **GitHub API Rate Limit Retries:** Wraps GitHub API calls in a retry handler that performs exponential backoff when encountering rate limit responses (HTTP 403 or 429).
-*   **Latency Metric Tracking:** Automatically calculates and logs startup latency metrics for GitHub issues by recording `devcontainer-startup-latency` to GitHub comments after successful container provisioning.
+*   **Latency Metric Tracking:** Automatically calculates and logs startup latency metrics for GitHub issues by recording `devcontainer-startup-latency` to GitHub comments after successful container provisioning. Includes robust test cases to verify error handling and prevent duplicate postings.
 ---
 
 ## 🛠️ Architecture & Workflow
