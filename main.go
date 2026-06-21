@@ -363,6 +363,10 @@ func run(ctx context.Context, cfg *config) error {
 					container.LastActiveTimestamp = time.Now().Unix()
 					container.ErrorMessage = err.Error()
 					globalCache.Update(id, container)
+					// Delete container so it can be re-provisioned from head next time
+					if delErr := deleteContainer(repo, id); delErr != nil {
+						logWithPrefix(repo, "Warning: failed to delete failed devcontainer %s: %v", id, delErr)
+					}
 				} else {
 					container.Status = proto.ContainerStatus_RUNNING
 					container.LastActiveTimestamp = time.Now().Unix()
@@ -481,6 +485,10 @@ func run(ctx context.Context, cfg *config) error {
 									container.LastActiveTimestamp = time.Now().Unix()
 									container.ErrorMessage = err.Error()
 									globalCache.Update(containerID, container)
+									// Delete container so it can be re-provisioned from head next time
+									if delErr := deleteContainer(repo, containerID); delErr != nil {
+										logWithPrefix(repo, "Warning: failed to delete failed devcontainer %s: %v", containerID, delErr)
+									}
 									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
 									go reportStartupFailure(ctx, client, owner, repoName, branchName, issueNumber, err, string(out))
 								} else {
