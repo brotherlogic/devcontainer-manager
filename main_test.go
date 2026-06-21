@@ -1725,3 +1725,249 @@ func TestPostLatencyComment_CreatesNew(t *testing.T) {
 		t.Errorf("expected POST request to create comment")
 	}
 }
+
+func TestRun_ScanAndLaunchIssueContainer_LatencyCommentExists(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("test-owner/test-repo\n"); err != nil {
+		t.Fatalf("failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+
+	oldInterval := pollingInterval
+	oldTimeout := pollingTimeout
+	pollingInterval = 1 * time.Millisecond
+	pollingTimeout = 100 * time.Millisecond
+	defer func() {
+		pollingInterval = oldInterval
+		pollingTimeout = oldTimeout
+	}()
+
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			return []byte("test-repo Running\n"), nil
+		}
+		return []byte("success"), nil
+	}
+
+	originalDeriverRunAgy := defaultDeriver.runAgy
+	defer func() { defaultDeriver.runAgy = originalDeriverRunAgy }()
+	defaultDeriver.runAgy = func(ctx context.Context, prompt string) ([]byte, error) {
+		return []byte("mock_feature_slug"), nil
+	}
+
+	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `[
+			{
+				"number": 42,
+				"title": "My Awesome Feature",
+				"labels": [{"name": "seraphine-feature"}],
+				"created_at": "2023-01-01T00:00:00Z"
+			}
+		]`)
+	})
+
+	var postCalled bool
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/42/comments", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `[{"body": "This has devcontainer-startup-latency info"}]`)
+		} else if r.Method == http.MethodPost {
+			postCalled = true
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{}`)
+		}
+	})
+
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"number": 42, "title": "My Awesome Feature", "labels": [{"name": "seraphine-feature"}]}`)
+		} else {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `[]`)
+		}
+	})
+
+	mux.HandleFunc("/repos/test-owner/test-repo/git/ref/heads/feature/mock_feature_slug_42", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"ref": "refs/heads/feature/mock_feature_slug_42", "object": {"sha": "latest_sha"}}`)
+	})
+
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	cfg := &config{
+		once:               true,
+		containerList:      tmpFile.Name(),
+		maxIssueContainers: 5,
+	}
+
+	err = run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	
+	// Wait a moment for background goroutine to complete
+	time.Sleep(100 * time.Millisecond)
+
+	if postCalled {
+		t.Errorf("expected no POST request to create latency comment since one already existed")
+	}
+}
+
+func TestRun_ScanAndLaunchIssueContainer_LatencyCommentError(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("test-owner/test-repo\n"); err != nil {
+		t.Fatalf("failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+
+	oldInterval := pollingInterval
+	oldTimeout := pollingTimeout
+	pollingInterval = 1 * time.Millisecond
+	pollingTimeout = 100 * time.Millisecond
+	defer func() {
+		pollingInterval = oldInterval
+		pollingTimeout = oldTimeout
+	}()
+
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var devpodUpCalled bool
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		if name == devpodExe && len(args) > 0 && args[0] == "up" {
+			devpodUpCalled = true
+		}
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			return []byte("test-repo Running\n"), nil
+		}
+		return []byte("success"), nil
+	}
+
+	originalDeriverRunAgy := defaultDeriver.runAgy
+	defer func() { defaultDeriver.runAgy = originalDeriverRunAgy }()
+	defaultDeriver.runAgy = func(ctx context.Context, prompt string) ([]byte, error) {
+		return []byte("mock_feature_slug"), nil
+	}
+
+	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `[
+			{
+				"number": 42,
+				"title": "My Awesome Feature",
+				"labels": [{"name": "seraphine-feature"}],
+				"created_at": "2023-01-01T00:00:00Z"
+			}
+		]`)
+	})
+
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/42/comments", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `[]`)
+		} else if r.Method == http.MethodPost {
+			// Simulate an error from GitHub API
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"message": "Internal Server Error"}`)
+		}
+	})
+
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"number": 42, "title": "My Awesome Feature", "labels": [{"name": "seraphine-feature"}]}`)
+		} else {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `[]`)
+		}
+	})
+
+	mux.HandleFunc("/repos/test-owner/test-repo/git/ref/heads/feature/mock_feature_slug_42", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"ref": "refs/heads/feature/mock_feature_slug_42", "object": {"sha": "latest_sha"}}`)
+	})
+
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	cfg := &config{
+		once:               true,
+		containerList:      tmpFile.Name(),
+		maxIssueContainers: 5,
+	}
+
+	err = run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("expected run() to succeed despite API error, but got: %v", err)
+	}
+
+	// Wait a moment for background goroutine to complete
+	time.Sleep(100 * time.Millisecond)
+
+	if !devpodUpCalled {
+		t.Errorf("expected container to be successfully launched (devpod up) despite API error")
+	}
+}
+
