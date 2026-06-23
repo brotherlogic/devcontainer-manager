@@ -2,6 +2,8 @@
 
 This document serves as the entry point and index for Seraphine's issue-processing workflows. It outlines the general rules and lists the specific workflow files for each stage in the issue lifecycle.
 
+**Note:** Always use **native GitHub sub-issues** when defining parent-child issue relationships to ensure proper tracking within GitHub.
+
 ---
 
 ## 🚫 Critical General Rules
