@@ -470,7 +470,7 @@ func run(ctx context.Context, cfg *config) error {
 								log.Printf("Discovered new issue #%d labeled 'seraphine' in %s. Provisioning container...", issueNumber, repo)
 								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-creating", []string{"container-ready", "container-failed"})
 
-								slug, err := deriveFeatureSlug(ctx, issue.GetTitle())
+								slug, err := deriveFeatureSlug(issue.GetTitle())
 								if err != nil {
 									log.Printf("Failed to derive branch slug for issue %d: %v", issueNumber, err)
 									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
@@ -553,7 +553,7 @@ func run(ctx context.Context, cfg *config) error {
 									}
 								}
 							} else {
-								slug, err := deriveFeatureSlug(ctx, issue.GetTitle())
+								slug, err := deriveFeatureSlug(issue.GetTitle())
 								if err != nil {
 									log.Printf("Failed to derive branch slug for issue %d: %v", issueNumber, err)
 									continue
@@ -618,12 +618,15 @@ func run(ctx context.Context, cfg *config) error {
 					continue
 				}
 				projectID := id[:lastIdx]
+				repo := projectRepoMap[projectID]
+				if repo == "" {
+					continue
+				}
 				issueNumber, errNum := strconv.Atoi(id[lastIdx+1:])
 				if errNum != nil {
 					log.Printf("Debug: Skipping devpod %s: Failed to parse issue number from ID '%s': %v", id, id[lastIdx+1:], errNum)
 					continue
 				}
-				repo := projectRepoMap[projectID]
 				if repo != "" {
 					partsRepo := strings.Split(repo, "/")
 					if len(partsRepo) == 2 {
@@ -1386,55 +1389,43 @@ func injectStartupCommand(ctx context.Context, repo string, id string, startupCm
 	}
 }
 
-type slugDeriver struct {
-	runAgy func(ctx context.Context, prompt string) ([]byte, error)
-}
-
-func (sd *slugDeriver) derive(ctx context.Context, title string) (string, error) {
-	prompt := fmt.Sprintf("Given the GitHub issue title: '%s', generate a 3-word slug summarizing the feature. Output exactly three lowercase words separated by underscores, with no other text, punctuation, or explanation.", title)
-	output, err := sd.runAgy(ctx, prompt)
-	if err != nil {
-		return "", err
-	}
-
-	slug := strings.TrimSpace(string(output))
-	slug = strings.ToLower(slug)
-
+func deriveFeatureSlug(title string) (string, error) {
+	title = strings.ToLower(title)
 	var sb strings.Builder
-	for _, r := range slug {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+	for _, r := range title {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
 			sb.WriteRune(r)
-		}
-	}
-	cleaned := sb.String()
-
-	parts := strings.Split(cleaned, "_")
-	var words []string
-	for _, part := range parts {
-		if part != "" {
-			words = append(words, part)
+		} else {
+			sb.WriteRune(' ')
 		}
 	}
 
-	if len(words) != 3 {
-		return "", fmt.Errorf("derived slug %q is invalid: must have exactly 3 words, got %d", cleaned, len(words))
+	words := strings.Fields(sb.String())
+	var filtered []string
+	stopWords := map[string]bool{
+		"the": true, "a": true, "an": true, "to": true, "of": true,
+		"in": true, "for": true, "on": true, "with": true, "and": true,
+		"is": true, "it": true, "use": true, "add": true, "fix": true,
+	}
+	for _, w := range words {
+		if !stopWords[w] {
+			filtered = append(filtered, w)
+		}
 	}
 
-	return strings.Join(words, "_"), nil
-}
+	if len(filtered) == 0 {
+		filtered = words
+	}
 
-var defaultDeriver = &slugDeriver{
-	runAgy: func(ctx context.Context, prompt string) ([]byte, error) {
-		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "agy", "--prompt", prompt)
-		cmd.WaitDelay = time.Second
-		return cmd.Output()
-	},
-}
+	if len(filtered) > 3 {
+		filtered = filtered[:3]
+	}
 
-func deriveFeatureSlug(ctx context.Context, title string) (string, error) {
-	return defaultDeriver.derive(ctx, title)
+	for len(filtered) < 3 {
+		filtered = append(filtered, "feature")
+	}
+
+	return strings.Join(filtered, "_"), nil
 }
 
 func ensureIssueBranchExists(ctx context.Context, client *github.Client, owner, repoName, branchName string) error {
