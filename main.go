@@ -470,7 +470,7 @@ func run(ctx context.Context, cfg *config) error {
 								log.Printf("Discovered new issue #%d labeled 'seraphine' in %s. Provisioning container...", issueNumber, repo)
 								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-creating", []string{"container-ready", "container-failed"})
 
-								slug, err := deriveFeatureSlug(ctx, issue.GetTitle())
+								slug, err := deriveFeatureSlug(issue.GetTitle())
 								if err != nil {
 									log.Printf("Failed to derive branch slug for issue %d: %v", issueNumber, err)
 									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
@@ -553,7 +553,7 @@ func run(ctx context.Context, cfg *config) error {
 									}
 								}
 							} else {
-								slug, err := deriveFeatureSlug(ctx, issue.GetTitle())
+								slug, err := deriveFeatureSlug(issue.GetTitle())
 								if err != nil {
 									log.Printf("Failed to derive branch slug for issue %d: %v", issueNumber, err)
 									continue
@@ -1389,7 +1389,7 @@ func injectStartupCommand(ctx context.Context, repo string, id string, startupCm
 	}
 }
 
-func deriveFeatureSlug(ctx context.Context, title string) (string, error) {
+func deriveFeatureSlug(title string) (string, error) {
 	title = strings.ToLower(title)
 	var sb strings.Builder
 	for _, r := range title {
