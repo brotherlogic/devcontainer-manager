@@ -231,6 +231,7 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 				"number": 42,
 				"title": "My Awesome Feature",
 				"labels": [{"name": "seraphine-feature"}],
+				"assignees": [{"login": "user1"}],
 				"created_at": "2023-01-01T00:00:00Z"
 			}
 		]`)
@@ -431,7 +432,8 @@ func TestRun_SkipLaunchIfAlreadyActive(t *testing.T) {
 			{
 				"number": 42,
 				"title": "My Awesome Feature",
-				"labels": [{"name": "seraphine-feature"}]
+				"labels": [{"name": "seraphine-feature"}],
+				"assignees": [{"login": "user1"}]
 			}
 		]`)
 	})
@@ -513,7 +515,7 @@ func TestRun_HibernationOfOldestContainers(t *testing.T) {
 	mux.HandleFunc("/repos/test-owner/test-repo/issues/1", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"number": 1, "state": "open", "updated_at": "2026-05-31T12:00:00Z", "labels": [{"name": "seraphine"}]}`)
+		fmt.Fprint(w, `{"number": 1, "state": "open", "updated_at": "2026-05-31T12:00:00Z", "labels": [{"name": "seraphine"}], "assignees": [{"login": "user1"}]}`)
 	})
 	mux.HandleFunc("/repos/test-owner/test-repo/issues/2", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -918,7 +920,8 @@ func TestRun_ScanAndLaunchIssueContainer_Failure(t *testing.T) {
 			{
 				"number": 42,
 				"title": "My Awesome Feature",
-				"labels": [{"name": "seraphine-feature"}]
+				"labels": [{"name": "seraphine-feature"}],
+				"assignees": [{"login": "user1"}]
 			}
 		]`)
 	})
@@ -1094,7 +1097,8 @@ func TestRun_RecreateIssueContainerOnHashChange(t *testing.T) {
 			{
 				"number": 42,
 				"title": "My Awesome Feature",
-				"labels": [{"name": "seraphine-feature"}]
+				"labels": [{"name": "seraphine-feature"}],
+				"assignees": [{"login": "user1"}]
 			}
 		]`)
 	})
@@ -1103,7 +1107,7 @@ func TestRun_RecreateIssueContainerOnHashChange(t *testing.T) {
 	mux.HandleFunc("/repos/test-owner/test-repo/issues/42", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"number": 42, "state": "open", "updated_at": "2026-05-31T12:00:00Z", "labels": [{"name": "seraphine"}]}`)
+		fmt.Fprint(w, `{"number": 42, "state": "open", "updated_at": "2026-05-31T12:00:00Z", "labels": [{"name": "seraphine"}], "assignees": [{"login": "user1"}]}`)
 	})
 
 	// 3. New devcontainer file contents to produce a NEW SHA (new_sha_456)
@@ -1557,7 +1561,7 @@ func TestListOpenIssuesProvider_Success(t *testing.T) {
 		t.Errorf("expected commandName 'gh', got '%s'", commandName)
 	}
 
-	expectedArgs := []string{"issue", "list", "-R", "brotherlogic/devcontainer-manager", "--state", "open", "--json", "number,title,labels"}
+	expectedArgs := []string{"issue", "list", "-R", "brotherlogic/devcontainer-manager", "--state", "open", "--json", "number,title,labels,assignees"}
 	if len(commandArgs) != len(expectedArgs) {
 		t.Fatalf("expected %d args, got %d", len(expectedArgs), len(commandArgs))
 	}
@@ -1701,6 +1705,7 @@ func TestRun_ScanAndLaunchIssueContainer_LatencyCommentExists(t *testing.T) {
 				"number": 42,
 				"title": "My Awesome Feature",
 				"labels": [{"name": "seraphine-feature"}],
+				"assignees": [{"login": "user1"}],
 				"created_at": "2023-01-01T00:00:00Z"
 			}
 		]`)
@@ -1822,6 +1827,7 @@ func TestRun_ScanAndLaunchIssueContainer_LatencyCommentError(t *testing.T) {
 				"number": 42,
 				"title": "My Awesome Feature",
 				"labels": [{"name": "seraphine-feature"}],
+				"assignees": [{"login": "user1"}],
 				"created_at": "2023-01-01T00:00:00Z"
 			}
 		]`)
