@@ -55,4 +55,5 @@ Seraphine posts the finalized implementation plan to the sub-issue using premium
   2. Programmatically create a new **native GitHub sub-issue**:
      - **Sub-Issue Title:** `[Breakdown] <Parent Issue Title>`
      - **Sub-Issue Label:** `seraphine-break-down-issue`
+     - **Assignee:** `brotherlogic@gmail.com`
      - **Sub-Issue Description:** A link referencing the `[Implementation Plan]` issue and instructing the agent to begin the issue breakdown. Ensure the native GitHub sub-issue relationship is established with the parent issue.
