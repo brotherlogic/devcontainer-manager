@@ -1380,10 +1380,6 @@ func injectStartupCommand(ctx context.Context, repo string, id string, startupCm
 				if lastIdx != -1 {
 					if _, errNum := strconv.Atoi(id[lastIdx+1:]); errNum == nil {
 						baseID := id[:lastIdx]
-						// If the project ID is devcontainer-manager, the tmux session is named "dcm"
-						if baseID == "devcontainer-manager" {
-							baseID = "dcm"
-						}
 						fallbackOut, fallbackErr := runCommandWithLog(repo, devpodExe, "ssh", id, "--command", fmt.Sprintf("tmux has-session -t %s", baseID))
 						if fallbackErr == nil {
 							err = nil
