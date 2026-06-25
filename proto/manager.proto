@@ -21,9 +21,16 @@ enum State {
   DCM_HARD_FAILED = 7;
 }
 
+message Identifier {
+  oneof id {
+    int32 issue_number = 1;
+    int32 pr_number = 2;
+  }
+}
+
 message UpRequest {
   string repo = 1;
-  string identifier = 2; // e.g., Issue or PR number
+  Identifier identifier = 2; // e.g., Issue or PR number
   string branch = 3;
   string prompt = 4;
 }

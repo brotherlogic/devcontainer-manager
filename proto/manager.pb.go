@@ -85,10 +85,92 @@ func (State) EnumDescriptor() ([]byte, []int) {
 	return file_proto_manager_proto_rawDescGZIP(), []int{0}
 }
 
+type Identifier struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Id:
+	//
+	//	*Identifier_IssueNumber
+	//	*Identifier_PrNumber
+	Id            isIdentifier_Id `protobuf_oneof:"id"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Identifier) Reset() {
+	*x = Identifier{}
+	mi := &file_proto_manager_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Identifier) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Identifier) ProtoMessage() {}
+
+func (x *Identifier) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_manager_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Identifier.ProtoReflect.Descriptor instead.
+func (*Identifier) Descriptor() ([]byte, []int) {
+	return file_proto_manager_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *Identifier) GetId() isIdentifier_Id {
+	if x != nil {
+		return x.Id
+	}
+	return nil
+}
+
+func (x *Identifier) GetIssueNumber() int32 {
+	if x != nil {
+		if x, ok := x.Id.(*Identifier_IssueNumber); ok {
+			return x.IssueNumber
+		}
+	}
+	return 0
+}
+
+func (x *Identifier) GetPrNumber() int32 {
+	if x != nil {
+		if x, ok := x.Id.(*Identifier_PrNumber); ok {
+			return x.PrNumber
+		}
+	}
+	return 0
+}
+
+type isIdentifier_Id interface {
+	isIdentifier_Id()
+}
+
+type Identifier_IssueNumber struct {
+	IssueNumber int32 `protobuf:"varint,1,opt,name=issue_number,json=issueNumber,proto3,oneof"`
+}
+
+type Identifier_PrNumber struct {
+	PrNumber int32 `protobuf:"varint,2,opt,name=pr_number,json=prNumber,proto3,oneof"`
+}
+
+func (*Identifier_IssueNumber) isIdentifier_Id() {}
+
+func (*Identifier_PrNumber) isIdentifier_Id() {}
+
 type UpRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Repo          string                 `protobuf:"bytes,1,opt,name=repo,proto3" json:"repo,omitempty"`
-	Identifier    string                 `protobuf:"bytes,2,opt,name=identifier,proto3" json:"identifier,omitempty"` // e.g., Issue or PR number
+	Identifier    *Identifier            `protobuf:"bytes,2,opt,name=identifier,proto3" json:"identifier,omitempty"` // e.g., Issue or PR number
 	Branch        string                 `protobuf:"bytes,3,opt,name=branch,proto3" json:"branch,omitempty"`
 	Prompt        string                 `protobuf:"bytes,4,opt,name=prompt,proto3" json:"prompt,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -97,7 +179,7 @@ type UpRequest struct {
 
 func (x *UpRequest) Reset() {
 	*x = UpRequest{}
-	mi := &file_proto_manager_proto_msgTypes[0]
+	mi := &file_proto_manager_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -109,7 +191,7 @@ func (x *UpRequest) String() string {
 func (*UpRequest) ProtoMessage() {}
 
 func (x *UpRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_manager_proto_msgTypes[0]
+	mi := &file_proto_manager_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -122,7 +204,7 @@ func (x *UpRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpRequest.ProtoReflect.Descriptor instead.
 func (*UpRequest) Descriptor() ([]byte, []int) {
-	return file_proto_manager_proto_rawDescGZIP(), []int{0}
+	return file_proto_manager_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *UpRequest) GetRepo() string {
@@ -132,11 +214,11 @@ func (x *UpRequest) GetRepo() string {
 	return ""
 }
 
-func (x *UpRequest) GetIdentifier() string {
+func (x *UpRequest) GetIdentifier() *Identifier {
 	if x != nil {
 		return x.Identifier
 	}
-	return ""
+	return nil
 }
 
 func (x *UpRequest) GetBranch() string {
@@ -162,7 +244,7 @@ type UpResponse struct {
 
 func (x *UpResponse) Reset() {
 	*x = UpResponse{}
-	mi := &file_proto_manager_proto_msgTypes[1]
+	mi := &file_proto_manager_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -174,7 +256,7 @@ func (x *UpResponse) String() string {
 func (*UpResponse) ProtoMessage() {}
 
 func (x *UpResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_manager_proto_msgTypes[1]
+	mi := &file_proto_manager_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -187,7 +269,7 @@ func (x *UpResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpResponse.ProtoReflect.Descriptor instead.
 func (*UpResponse) Descriptor() ([]byte, []int) {
-	return file_proto_manager_proto_rawDescGZIP(), []int{1}
+	return file_proto_manager_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *UpResponse) GetConfig() *DevcontainerConfig {
@@ -206,7 +288,7 @@ type DownRequest struct {
 
 func (x *DownRequest) Reset() {
 	*x = DownRequest{}
-	mi := &file_proto_manager_proto_msgTypes[2]
+	mi := &file_proto_manager_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -218,7 +300,7 @@ func (x *DownRequest) String() string {
 func (*DownRequest) ProtoMessage() {}
 
 func (x *DownRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_manager_proto_msgTypes[2]
+	mi := &file_proto_manager_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -231,7 +313,7 @@ func (x *DownRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownRequest.ProtoReflect.Descriptor instead.
 func (*DownRequest) Descriptor() ([]byte, []int) {
-	return file_proto_manager_proto_rawDescGZIP(), []int{2}
+	return file_proto_manager_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *DownRequest) GetId() string {
@@ -249,7 +331,7 @@ type DownResponse struct {
 
 func (x *DownResponse) Reset() {
 	*x = DownResponse{}
-	mi := &file_proto_manager_proto_msgTypes[3]
+	mi := &file_proto_manager_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -261,7 +343,7 @@ func (x *DownResponse) String() string {
 func (*DownResponse) ProtoMessage() {}
 
 func (x *DownResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_manager_proto_msgTypes[3]
+	mi := &file_proto_manager_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -274,7 +356,7 @@ func (x *DownResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownResponse.ProtoReflect.Descriptor instead.
 func (*DownResponse) Descriptor() ([]byte, []int) {
-	return file_proto_manager_proto_rawDescGZIP(), []int{3}
+	return file_proto_manager_proto_rawDescGZIP(), []int{4}
 }
 
 type ListRequest struct {
@@ -285,7 +367,7 @@ type ListRequest struct {
 
 func (x *ListRequest) Reset() {
 	*x = ListRequest{}
-	mi := &file_proto_manager_proto_msgTypes[4]
+	mi := &file_proto_manager_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -297,7 +379,7 @@ func (x *ListRequest) String() string {
 func (*ListRequest) ProtoMessage() {}
 
 func (x *ListRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_manager_proto_msgTypes[4]
+	mi := &file_proto_manager_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -310,7 +392,7 @@ func (x *ListRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRequest.ProtoReflect.Descriptor instead.
 func (*ListRequest) Descriptor() ([]byte, []int) {
-	return file_proto_manager_proto_rawDescGZIP(), []int{4}
+	return file_proto_manager_proto_rawDescGZIP(), []int{5}
 }
 
 type ListResponse struct {
@@ -322,7 +404,7 @@ type ListResponse struct {
 
 func (x *ListResponse) Reset() {
 	*x = ListResponse{}
-	mi := &file_proto_manager_proto_msgTypes[5]
+	mi := &file_proto_manager_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -334,7 +416,7 @@ func (x *ListResponse) String() string {
 func (*ListResponse) ProtoMessage() {}
 
 func (x *ListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_manager_proto_msgTypes[5]
+	mi := &file_proto_manager_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -347,7 +429,7 @@ func (x *ListResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListResponse.ProtoReflect.Descriptor instead.
 func (*ListResponse) Descriptor() ([]byte, []int) {
-	return file_proto_manager_proto_rawDescGZIP(), []int{5}
+	return file_proto_manager_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ListResponse) GetConfigs() []*DevcontainerConfig {
@@ -371,7 +453,7 @@ type DevcontainerConfig struct {
 
 func (x *DevcontainerConfig) Reset() {
 	*x = DevcontainerConfig{}
-	mi := &file_proto_manager_proto_msgTypes[6]
+	mi := &file_proto_manager_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -383,7 +465,7 @@ func (x *DevcontainerConfig) String() string {
 func (*DevcontainerConfig) ProtoMessage() {}
 
 func (x *DevcontainerConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_manager_proto_msgTypes[6]
+	mi := &file_proto_manager_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -396,7 +478,7 @@ func (x *DevcontainerConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DevcontainerConfig.ProtoReflect.Descriptor instead.
 func (*DevcontainerConfig) Descriptor() ([]byte, []int) {
-	return file_proto_manager_proto_rawDescGZIP(), []int{6}
+	return file_proto_manager_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *DevcontainerConfig) GetId() string {
@@ -445,11 +527,16 @@ var File_proto_manager_proto protoreflect.FileDescriptor
 
 const file_proto_manager_proto_rawDesc = "" +
 	"\n" +
-	"\x13proto/manager.proto\x12\amanager\"o\n" +
-	"\tUpRequest\x12\x12\n" +
-	"\x04repo\x18\x01 \x01(\tR\x04repo\x12\x1e\n" +
+	"\x13proto/manager.proto\x12\amanager\"V\n" +
 	"\n" +
-	"identifier\x18\x02 \x01(\tR\n" +
+	"Identifier\x12#\n" +
+	"\fissue_number\x18\x01 \x01(\x05H\x00R\vissueNumber\x12\x1d\n" +
+	"\tpr_number\x18\x02 \x01(\x05H\x00R\bprNumberB\x04\n" +
+	"\x02id\"\x84\x01\n" +
+	"\tUpRequest\x12\x12\n" +
+	"\x04repo\x18\x01 \x01(\tR\x04repo\x123\n" +
+	"\n" +
+	"identifier\x18\x02 \x01(\v2\x13.manager.IdentifierR\n" +
 	"identifier\x12\x16\n" +
 	"\x06branch\x18\x03 \x01(\tR\x06branch\x12\x16\n" +
 	"\x06prompt\x18\x04 \x01(\tR\x06prompt\"A\n" +
@@ -497,33 +584,35 @@ func file_proto_manager_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_manager_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_manager_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_proto_manager_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_proto_manager_proto_goTypes = []any{
 	(State)(0),                 // 0: manager.State
-	(*UpRequest)(nil),          // 1: manager.UpRequest
-	(*UpResponse)(nil),         // 2: manager.UpResponse
-	(*DownRequest)(nil),        // 3: manager.DownRequest
-	(*DownResponse)(nil),       // 4: manager.DownResponse
-	(*ListRequest)(nil),        // 5: manager.ListRequest
-	(*ListResponse)(nil),       // 6: manager.ListResponse
-	(*DevcontainerConfig)(nil), // 7: manager.DevcontainerConfig
+	(*Identifier)(nil),         // 1: manager.Identifier
+	(*UpRequest)(nil),          // 2: manager.UpRequest
+	(*UpResponse)(nil),         // 3: manager.UpResponse
+	(*DownRequest)(nil),        // 4: manager.DownRequest
+	(*DownResponse)(nil),       // 5: manager.DownResponse
+	(*ListRequest)(nil),        // 6: manager.ListRequest
+	(*ListResponse)(nil),       // 7: manager.ListResponse
+	(*DevcontainerConfig)(nil), // 8: manager.DevcontainerConfig
 }
 var file_proto_manager_proto_depIdxs = []int32{
-	7, // 0: manager.UpResponse.config:type_name -> manager.DevcontainerConfig
-	7, // 1: manager.ListResponse.configs:type_name -> manager.DevcontainerConfig
-	1, // 2: manager.DevcontainerConfig.request:type_name -> manager.UpRequest
-	0, // 3: manager.DevcontainerConfig.state:type_name -> manager.State
-	1, // 4: manager.ManagerService.Up:input_type -> manager.UpRequest
-	3, // 5: manager.ManagerService.Down:input_type -> manager.DownRequest
-	5, // 6: manager.ManagerService.List:input_type -> manager.ListRequest
-	2, // 7: manager.ManagerService.Up:output_type -> manager.UpResponse
-	4, // 8: manager.ManagerService.Down:output_type -> manager.DownResponse
-	6, // 9: manager.ManagerService.List:output_type -> manager.ListResponse
-	7, // [7:10] is the sub-list for method output_type
-	4, // [4:7] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	1, // 0: manager.UpRequest.identifier:type_name -> manager.Identifier
+	8, // 1: manager.UpResponse.config:type_name -> manager.DevcontainerConfig
+	8, // 2: manager.ListResponse.configs:type_name -> manager.DevcontainerConfig
+	2, // 3: manager.DevcontainerConfig.request:type_name -> manager.UpRequest
+	0, // 4: manager.DevcontainerConfig.state:type_name -> manager.State
+	2, // 5: manager.ManagerService.Up:input_type -> manager.UpRequest
+	4, // 6: manager.ManagerService.Down:input_type -> manager.DownRequest
+	6, // 7: manager.ManagerService.List:input_type -> manager.ListRequest
+	3, // 8: manager.ManagerService.Up:output_type -> manager.UpResponse
+	5, // 9: manager.ManagerService.Down:output_type -> manager.DownResponse
+	7, // 10: manager.ManagerService.List:output_type -> manager.ListResponse
+	8, // [8:11] is the sub-list for method output_type
+	5, // [5:8] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_proto_manager_proto_init() }
@@ -531,13 +620,17 @@ func file_proto_manager_proto_init() {
 	if File_proto_manager_proto != nil {
 		return
 	}
+	file_proto_manager_proto_msgTypes[0].OneofWrappers = []any{
+		(*Identifier_IssueNumber)(nil),
+		(*Identifier_PrNumber)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_manager_proto_rawDesc), len(file_proto_manager_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
