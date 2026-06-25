@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package manager;
+
+option go_package = "github.com/brotherlogic/devcontainer-manager/proto";
+
+service ManagerService {
+  rpc Up(UpRequest) returns (UpResponse);
+  rpc Down(DownRequest) returns (DownResponse);
+  rpc List(ListRequest) returns (ListResponse);
+}
+
+enum State {
+  UNKNOWN_STATE = 0;
+  DCM_RECEIVED = 1;
+  DCM_CREATING = 2;
+  DCM_BRANCHING = 3;
+  DCM_HARNESS = 4;
+  DCM_READY = 5;
+  DCM_FAILED = 6;
+  DCM_HARD_FAILED = 7;
+}
+
+message UpRequest {
+  string repo = 1;
+  string identifier = 2; // e.g., Issue or PR number
+  string branch = 3;
+  string prompt = 4;
+}
+
+message UpResponse {
+  DevcontainerConfig config = 1;
+}
+
+message DownRequest {
+  string id = 1;
+}
+
+message DownResponse {}
+
+message ListRequest {}
+
+message ListResponse {
+  repeated DevcontainerConfig configs = 1;
+}
+
+message DevcontainerConfig {
+  string id = 1; // Unique identifier for this devcontainer request
+  UpRequest request = 2; // Original request details
+  State state = 3;
+  string error_message = 4;
+  int32 init_retry_count = 5;
+  int64 next_retry_time_unix = 6;
+}

@@ -108,11 +108,13 @@ DCM keeps track of the active configurations it processes to prevent redundant r
     rm ~/.config/devcontainer-manager/tracked_shas.json
     ```
 
-## 📊 gRPC Dashboard Service
+## 📊 gRPC Manager Service (Previously Dashboard)
 
-DCM hosts a gRPC service implementing `DashboardService` defined in `proto/dashboard.proto`. This service provides:
-*   **ListContainers RPC:** Retrieves a list of active devcontainers with their metadata, including ID, Repository URL, Branch or Issue number, current Lifecycle Status (`STARTING`, `RUNNING`, `FAILED`), last active timestamp, and error messages (if applicable).
-*   **Thread-Safe In-Memory Status Cache:** The state is updated in real-time as devcontainers transition through different lifecycle stages, and is periodically synchronized with the actual running containers on the host.
+DCM hosts a gRPC service implementing `ManagerService` defined in `proto/manager.proto` (which replaces and deprecates `dashboard.proto`). This service provides:
+*   **Up RPC:** Programmatically trigger the creation of a devcontainer for a specific repository, branch, or issue.
+*   **Down RPC:** Cancel and cleanup an existing devcontainer by ID.
+*   **List RPC:** Retrieves a list of active devcontainers with their metadata, including ID, Request details, current State (`DCM_RECEIVED`, `DCM_READY`, `DCM_FAILED`, etc.), and retry status.
+*   **Thread-Safe State persistence:** The state is updated in real-time as devcontainers transition through different lifecycle stages, and integrates with persistent storage (`pstore`).
 
 ---
 
