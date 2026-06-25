@@ -91,7 +91,7 @@ var gitHubClientProvider = getGHClient
 
 var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, owner, repoName string) ([]*github.Issue, error) {
 	repoPath := fmt.Sprintf("%s/%s", owner, repoName)
-	out, err := commandRunner("gh", "issue", "list", "-R", repoPath, "--state", "open", "--json", "number,title,labels")
+	out, err := commandRunner("gh", "issue", "list", "-R", repoPath, "--state", "open", "--json", "number,title,labels,assignees")
 	if err == nil {
 		var rawIssues []struct {
 			Number int    `json:"number"`
@@ -99,6 +99,9 @@ var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, ow
 			Labels []struct {
 				Name string `json:"name"`
 			} `json:"labels"`
+			Assignees []struct {
+				Login string `json:"login"`
+			} `json:"assignees"`
 		}
 		if errUnmarshal := json.Unmarshal(out, &rawIssues); errUnmarshal == nil {
 			var issues []*github.Issue
@@ -112,10 +115,23 @@ var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, ow
 						Name: &name,
 					})
 				}
+				var assignees []*github.User
+				for _, a := range raw.Assignees {
+					login := a.Login
+					assignees = append(assignees, &github.User{
+						Login: &login,
+					})
+				}
+				var assignee *github.User
+				if len(assignees) > 0 {
+					assignee = assignees[0]
+				}
 				issues = append(issues, &github.Issue{
-					Number: &num,
-					Title:  &title,
-					Labels: labels,
+					Number:    &num,
+					Title:     &title,
+					Labels:    labels,
+					Assignee:  assignee,
+					Assignees: assignees,
 				})
 			}
 			return issues, nil
@@ -455,6 +471,10 @@ func run(ctx context.Context, cfg *config) error {
 								}
 							}
 							if !hasSeraphineLabel {
+								continue
+							}
+
+							if len(issue.Assignees) == 0 && issue.GetAssignee() == nil {
 								continue
 							}
 
