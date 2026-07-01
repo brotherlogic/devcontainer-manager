@@ -291,6 +291,20 @@ func main() {
 	}
 	defer srv.GracefulStop()
 
+	go func() {
+		for {
+			log.Printf("Running periodic docker system prune...")
+			cmd := exec.Command("docker", "system", "prune", "-af", "--volumes")
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				log.Printf("Docker prune failed: %v\nOutput: %s", err, string(output))
+			} else {
+				log.Printf("Docker prune succeeded")
+			}
+			time.Sleep(24 * time.Hour)
+		}
+	}()
+
 	for {
 		err := run(context.Background(), cfg)
 		if err != nil {
