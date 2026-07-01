@@ -25,6 +25,7 @@ import (
 
 	"github.com/brotherlogic/devcontainer-manager/proto"
 	"github.com/brotherlogic/devcontainer-manager/server"
+	pstore_client "github.com/brotherlogic/pstore/client"
 	"github.com/google/go-github/v50/github"
 	"golang.org/x/oauth2"
 	"google.golang.org/grpc"
@@ -188,6 +189,13 @@ func startGRPCServer(port int, cache *server.Cache) (*grpc.Server, error) {
 	}
 	s := grpc.NewServer()
 	proto.RegisterDashboardServiceServer(s, server.NewServer(cache))
+	
+	pstoreClient, err := pstore_client.GetClient()
+	if err == nil {
+		proto.RegisterManagerServiceServer(s, server.NewManagerServer(pstoreClient))
+	} else {
+		log.Printf("Could not start manager service, pstore client failed: %v", err)
+	}
 	go func() {
 		if err := s.Serve(lis); err != nil {
 			log.Printf("gRPC server stopped: %v", err)

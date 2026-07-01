@@ -3,6 +3,7 @@ module github.com/brotherlogic/devcontainer-manager
 go 1.25.0
 
 require (
+	github.com/brotherlogic/pstore v0.73.0
 	github.com/google/go-github/v50 v50.2.0
 	golang.org/x/oauth2 v0.36.0
 	google.golang.org/grpc v1.81.1
