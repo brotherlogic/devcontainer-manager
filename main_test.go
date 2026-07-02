@@ -1888,3 +1888,60 @@ func TestRun_ScanAndLaunchIssueContainer_LatencyCommentError(t *testing.T) {
 	}
 }
 
+func TestListDevpodWorkspaces_WithWarnings(t *testing.T) {
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		output := "06:45:43 warn Couldn't load workspace dcrouter: unexpected end of JSON input\n" +
+			"06:45:43 warn Couldn't load workspace gemclust: unexpected end of JSON input\n" +
+			"[\n" +
+			"  {\n" +
+			"    \"id\": \"devcontainer-manager\",\n" +
+			"    \"uid\": \"12345\",\n" +
+			"    \"source\": {\n" +
+			"      \"gitRepository\": \"git@github.com:brotherlogic/devcontainer-manager\"\n" +
+			"    }\n" +
+			"  }\n" +
+			"]"
+		return []byte(output), nil
+	}
+
+	workspaces, err := listDevpodWorkspaces()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(workspaces) != 1 {
+		t.Fatalf("expected 1 workspace, got %d", len(workspaces))
+	}
+
+	if workspaces[0].ID != "devcontainer-manager" {
+		t.Errorf("expected ID devcontainer-manager, got %s", workspaces[0].ID)
+	}
+}
+
+func TestListDevpodWorkspaces_SingleLineJSONWithWarnings(t *testing.T) {
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		output := "06:45:43 warn [Some log output]\n" +
+			"[{\"id\":\"devcontainer-manager\",\"uid\":\"12345\",\"source\":{\"gitRepository\":\"git@github.com:brotherlogic/devcontainer-manager\"}}]"
+		return []byte(output), nil
+	}
+
+	workspaces, err := listDevpodWorkspaces()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(workspaces) != 1 {
+		t.Fatalf("expected 1 workspace, got %d", len(workspaces))
+	}
+
+	if workspaces[0].ID != "devcontainer-manager" {
+		t.Errorf("expected ID devcontainer-manager, got %s", workspaces[0].ID)
+	}
+}
+
