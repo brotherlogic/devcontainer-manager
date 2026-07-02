@@ -46,6 +46,8 @@ func getGHClient() (*github.Client, error) {
 		return nil, fmt.Errorf("GITHUB_TOKEN is not set")
 	}
 
+
+
 	ts := oauth2.StaticTokenSource(
 		&oauth2.Token{AccessToken: token},
 	)
@@ -82,7 +84,29 @@ func listDevpodWorkspaces() ([]DevpodWorkspace, error) {
 	}
 	var workspaces []DevpodWorkspace
 	if err := json.Unmarshal(out, &workspaces); err != nil {
-		return nil, fmt.Errorf("failed to parse devpod list json: %w", err)
+		outStr := string(out)
+		lines := strings.Split(outStr, "\n")
+		var found bool
+		for i, line := range lines {
+			if strings.HasPrefix(strings.TrimSpace(line), "[") {
+				if err2 := json.Unmarshal([]byte(strings.Join(lines[i:], "\n")), &workspaces); err2 == nil {
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			start := strings.Index(outStr, "[")
+			end := strings.LastIndex(outStr, "]")
+			if start != -1 && end != -1 && end >= start {
+				if err3 := json.Unmarshal([]byte(outStr[start:end+1]), &workspaces); err3 == nil {
+					found = true
+				}
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("failed to parse devpod list json: %w", err)
+		}
 	}
 	return workspaces, nil
 }
@@ -287,6 +311,20 @@ func main() {
 		log.Fatalf("Failed to start gRPC server: %v", err)
 	}
 	defer srv.GracefulStop()
+
+	go func() {
+		for {
+			log.Printf("Running periodic docker system prune...")
+			cmd := exec.Command("docker", "system", "prune", "-af", "--volumes")
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				log.Printf("Docker prune failed: %v\nOutput: %s", err, string(output))
+			} else {
+				log.Printf("Docker prune succeeded")
+			}
+			time.Sleep(24 * time.Hour)
+		}
+	}()
 
 	for {
 		err := run(context.Background(), cfg)
