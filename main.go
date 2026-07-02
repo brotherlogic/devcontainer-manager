@@ -85,7 +85,29 @@ func listDevpodWorkspaces() ([]DevpodWorkspace, error) {
 	}
 	var workspaces []DevpodWorkspace
 	if err := json.Unmarshal(out, &workspaces); err != nil {
-		return nil, fmt.Errorf("failed to parse devpod list json: %w", err)
+		outStr := string(out)
+		lines := strings.Split(outStr, "\n")
+		var found bool
+		for i, line := range lines {
+			if strings.HasPrefix(strings.TrimSpace(line), "[") {
+				if err2 := json.Unmarshal([]byte(strings.Join(lines[i:], "\n")), &workspaces); err2 == nil {
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			start := strings.Index(outStr, "[")
+			end := strings.LastIndex(outStr, "]")
+			if start != -1 && end != -1 && end >= start {
+				if err3 := json.Unmarshal([]byte(outStr[start:end+1]), &workspaces); err3 == nil {
+					found = true
+				}
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("failed to parse devpod list json: %w", err)
+		}
 	}
 	return workspaces, nil
 }
