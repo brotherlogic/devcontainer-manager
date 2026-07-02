@@ -46,8 +46,7 @@ func getGHClient() (*github.Client, error) {
 		return nil, fmt.Errorf("GITHUB_TOKEN is not set")
 	}
 
-	// Propagate token to the environment so that child processes (like devpod) can use it
-	os.Setenv("GITHUB_TOKEN", token)
+
 
 	ts := oauth2.StaticTokenSource(
 		&oauth2.Token{AccessToken: token},
