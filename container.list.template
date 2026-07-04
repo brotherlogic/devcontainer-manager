@@ -1,6 +1,7 @@
 # List of devcontainers to be managed and synced
 brotherlogic/bartwarn
 brotherlogic/beerkellar
+brotherlogic/brotherlogic-os
 brotherlogic/cooking
 brotherlogic/dcrouter
 brotherlogic/devcontainer-manager
