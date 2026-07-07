@@ -53,5 +53,5 @@ Once the PRD is complete, the agent must execute the following automated steps o
 3. **Create Sub-Issue:** Programmatically create a **native GitHub sub-issue** to track the subsequent step:
    - **Sub-Issue Title:** `[Implementation Plan] <Parent Issue Title>`
    - **Sub-Issue Label:** `seraphine-needs-implementation-plan`
-   - **Assignee:** `brotherlogic@gmail.com`
+   - **Assignee:** `brotherlogic-automation`
    - **Sub-Issue Description:** A link referencing the parent issue and instructing the agent to begin drafting the implementation plan. Ensure the native GitHub sub-issue relationship is established with the parent issue.
