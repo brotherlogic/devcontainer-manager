@@ -114,6 +114,7 @@ DCM hosts a gRPC service implementing `ManagerService` defined in `proto/manager
 *   **Up RPC:** Programmatically trigger the creation of a devcontainer for a specific repository, branch, or issue.
 *   **Down RPC:** Cancel and cleanup an existing devcontainer by ID.
 *   **List RPC:** Retrieves a list of active devcontainers with their metadata, including ID, Request details, current State (`DCM_RECEIVED`, `DCM_READY`, `DCM_FAILED`, etc.), and retry status.
+*   **Internal Cache:** The internal server cache now maps containers directly to `DevcontainerConfig`, completely deprecating the old `Container` type and `ListContainers` RPC.
 *   **Thread-Safe State persistence:** The state is updated in real-time as devcontainers transition through different lifecycle stages, and integrates with persistent storage (`pstore`).
 
 ---
