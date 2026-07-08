@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"sync"
 
 	"github.com/brotherlogic/devcontainer-manager/proto"
@@ -44,9 +45,9 @@ func (c *Cache) List() []*proto.DevcontainerConfig {
 	return list
 }
 
-// Server implements the proto.DashboardServiceServer interface.
+// Server implements the proto.ManagerServiceServer interface.
 type Server struct {
-	proto.UnimplementedDashboardServiceServer
+	proto.UnimplementedManagerServiceServer
 	cache *Cache
 }
 
@@ -57,4 +58,12 @@ func NewServer(cache *Cache) *Server {
 	}
 }
 
-
+// List returns the list of all containers stored in the cache.
+func (s *Server) List(ctx context.Context, req *proto.ListRequest) (*proto.ListResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &proto.ListResponse{
+		Configs: s.cache.List(),
+	}, nil
+}

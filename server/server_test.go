@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -71,4 +72,26 @@ func TestCacheConcurrency(t *testing.T) {
 	wg.Wait()
 }
 
+func TestListRPC(t *testing.T) {
+	cache := NewCache()
+	server := NewServer(cache)
 
+	container := &proto.DevcontainerConfig{
+		Id:    "rpc-container",
+		State: proto.State_DCM_FAILED,
+	}
+	cache.Update("rpc-container", container)
+
+	resp, err := server.List(context.Background(), &proto.ListRequest{})
+	if err != nil {
+		t.Fatalf("unexpected error from List: %v", err)
+	}
+
+	if len(resp.Configs) != 1 {
+		t.Fatalf("expected 1 container in RPC response, got %d", len(resp.Configs))
+	}
+
+	if resp.Configs[0].Id != "rpc-container" {
+		t.Errorf("expected rpc-container, got %s", resp.Configs[0].Id)
+	}
+}
