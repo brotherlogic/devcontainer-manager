@@ -229,7 +229,7 @@ func syncCacheWithRunning(running map[string]bool) {
 	// 1. For each running container, make sure it is in the cache as RUNNING (if not already STARTING/RUNNING)
 	for cid := range running {
 		existing := globalCache.List()
-		var found *proto.Container
+		var found *proto.DevcontainerConfig
 		for _, c := range existing {
 			if c.Id == cid {
 				found = c
@@ -238,9 +238,8 @@ func syncCacheWithRunning(running map[string]bool) {
 		}
 
 		if found != nil {
-			if found.Status != proto.ContainerStatus_RUNNING && found.Status != proto.ContainerStatus_STARTING {
-				found.Status = proto.ContainerStatus_RUNNING
-				found.LastActiveTimestamp = time.Now().Unix()
+			if found.State != proto.State_DCM_READY && found.State != proto.State_DCM_CREATING {
+				found.State = proto.State_DCM_READY
 				globalCache.Update(cid, found)
 			}
 		} else {
@@ -253,19 +252,17 @@ func syncCacheWithRunning(running map[string]bool) {
 					branchOrIssue = cid[idx+1:]
 				}
 			}
-			globalCache.Update(cid, &proto.Container{
+			globalCache.Update(cid, &proto.DevcontainerConfig{
 				Id:                  cid,
-				RepositoryUrl:       repoURL,
-				BranchOrIssue:       branchOrIssue,
-				Status:              proto.ContainerStatus_RUNNING,
-				LastActiveTimestamp: time.Now().Unix(),
+				Request:             &proto.UpRequest{Repo: repoURL, Branch: branchOrIssue},
+				State:               proto.State_DCM_READY,
 			})
 		}
 	}
 
 	// 2. Remove containers from cache that are NOT in devpod list and not in STARTING status
 	for _, c := range globalCache.List() {
-		if !running[c.Id] && c.Status != proto.ContainerStatus_STARTING {
+		if !running[c.Id] && c.State != proto.State_DCM_CREATING {
 			globalCache.Delete(c.Id)
 		}
 	}
@@ -424,20 +421,17 @@ func run(ctx context.Context, cfg *config) error {
 
 			if !isAlreadyRunning {
 				logWithPrefix(repo, "Starting devcontainer")
-				container := &proto.Container{
+				container := &proto.DevcontainerConfig{
 					Id:                  id,
-					RepositoryUrl:       fmt.Sprintf("git@github.com:%s", repo),
-					BranchOrIssue:       defaultBranchRef,
-					Status:              proto.ContainerStatus_STARTING,
-					LastActiveTimestamp: time.Now().Unix(),
+					Request:             &proto.UpRequest{Repo: fmt.Sprintf("git@github.com:%s", repo), Branch: defaultBranchRef},
+					State:               proto.State_DCM_CREATING,
 				}
 				globalCache.Update(id, container)
 
 				out, err := runCommandWithLog(repo, devpodExe, "up", fmt.Sprintf("git@github.com:%s", repo), "--id", id, "--ide", "none")
 				if err != nil {
 					logWithPrefix(repo, "Failed to start devcontainer: %v (output: %s)", err, string(out))
-					container.Status = proto.ContainerStatus_FAILED
-					container.LastActiveTimestamp = time.Now().Unix()
+					container.State = proto.State_DCM_FAILED
 					container.ErrorMessage = err.Error()
 					globalCache.Update(id, container)
 					// Delete container so it can be re-provisioned from head next time
@@ -447,8 +441,7 @@ func run(ctx context.Context, cfg *config) error {
 					// Ensure the failed status remains in the cache for dashboard visibility despite the container deletion
 					globalCache.Update(id, container)
 				} else {
-					container.Status = proto.ContainerStatus_RUNNING
-					container.LastActiveTimestamp = time.Now().Unix()
+					container.State = proto.State_DCM_READY
 					globalCache.Update(id, container)
 					if cfg.startupCommand != "" {
 						wg.Add(1)
@@ -552,20 +545,17 @@ func run(ctx context.Context, cfg *config) error {
 
 								repoURL := fmt.Sprintf("git@github.com:%s/%s@%s", owner, repoName, branchName)
 								logWithPrefix(repo, "Launching issue container %s on branch %s", containerID, branchName)
-								container := &proto.Container{
+								container := &proto.DevcontainerConfig{
 									Id:                  containerID,
-									RepositoryUrl:       repoURL,
-									BranchOrIssue:       branchName,
-									Status:              proto.ContainerStatus_STARTING,
-									LastActiveTimestamp: time.Now().Unix(),
+									Request:             &proto.UpRequest{Repo: repoURL, Branch: branchName},
+									State:               proto.State_DCM_CREATING,
 								}
 								globalCache.Update(containerID, container)
 
 								out, err := runCommandWithLog(repo, devpodExe, "up", repoURL, "--id", containerID, "--ide", "none")
 								if err != nil {
 									logWithPrefix(repo, "Failed to launch devcontainer for issue %d: %v (output: %s)", issueNumber, err, string(out))
-									container.Status = proto.ContainerStatus_FAILED
-									container.LastActiveTimestamp = time.Now().Unix()
+									container.State = proto.State_DCM_FAILED
 									container.ErrorMessage = err.Error()
 									globalCache.Update(containerID, container)
 									// Delete container so it can be re-provisioned from head next time
@@ -577,8 +567,7 @@ func run(ctx context.Context, cfg *config) error {
 									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
 									go reportStartupFailure(ctx, client, owner, repoName, branchName, issueNumber, err, string(out))
 								} else {
-									container.Status = proto.ContainerStatus_RUNNING
-									container.LastActiveTimestamp = time.Now().Unix()
+									container.State = proto.State_DCM_READY
 									globalCache.Update(containerID, container)
 									stateMu.Lock()
 									running[containerID] = true
@@ -1297,26 +1286,22 @@ func recreateContainer(ctx context.Context, repo string, id string, startupCmd s
 		logWithPrefix(repo, "Warning: failed to delete container %s before recreating: %v", id, err)
 	}
 
-	container := &proto.Container{
+	container := &proto.DevcontainerConfig{
 		Id:                  id,
-		RepositoryUrl:       fmt.Sprintf("git@github.com:%s", repo),
-		BranchOrIssue:       defaultBranchRef,
-		Status:              proto.ContainerStatus_STARTING,
-		LastActiveTimestamp: time.Now().Unix(),
+		Request:             &proto.UpRequest{Repo: fmt.Sprintf("git@github.com:%s", repo), Branch: defaultBranchRef},
+		State:               proto.State_DCM_CREATING,
 	}
 	globalCache.Update(id, container)
 
 	out, err := runCommandWithLog(repo, devpodExe, "up", fmt.Sprintf("git@github.com:%s", repo), "--id", id, "--ide", "none")
 	if err != nil {
-		container.Status = proto.ContainerStatus_FAILED
-		container.LastActiveTimestamp = time.Now().Unix()
+		container.State = proto.State_DCM_FAILED
 		container.ErrorMessage = err.Error()
 		globalCache.Update(id, container)
 		return fmt.Errorf("%s up failed: %w (output: %s)", devpodExe, err, string(out))
 	}
 
-	container.Status = proto.ContainerStatus_RUNNING
-	container.LastActiveTimestamp = time.Now().Unix()
+	container.State = proto.State_DCM_READY
 	globalCache.Update(id, container)
 
 	logWithPrefix(repo, "Successfully recreated devcontainer")
@@ -1341,26 +1326,22 @@ func recreateIssueContainer(ctx context.Context, owner, repoName, branchName, co
 	}
 	repoURL := fmt.Sprintf("git@github.com:%s/%s@%s", owner, repoName, branchName)
 
-	container := &proto.Container{
+	container := &proto.DevcontainerConfig{
 		Id:                  containerID,
-		RepositoryUrl:       repoURL,
-		BranchOrIssue:       branchName,
-		Status:              proto.ContainerStatus_STARTING,
-		LastActiveTimestamp: time.Now().Unix(),
+		Request:             &proto.UpRequest{Repo: repoURL, Branch: branchName},
+		State:               proto.State_DCM_CREATING,
 	}
 	globalCache.Update(containerID, container)
 
 	out, err := runCommandWithLog(repo, devpodExe, "up", repoURL, "--id", containerID, "--ide", "none")
 	if err != nil {
-		container.Status = proto.ContainerStatus_FAILED
-		container.LastActiveTimestamp = time.Now().Unix()
+		container.State = proto.State_DCM_FAILED
 		container.ErrorMessage = err.Error()
 		globalCache.Update(containerID, container)
 		return fmt.Errorf("%s up failed: %w (output: %s)", devpodExe, err, string(out))
 	}
 
-	container.Status = proto.ContainerStatus_RUNNING
-	container.LastActiveTimestamp = time.Now().Unix()
+	container.State = proto.State_DCM_READY
 	globalCache.Update(containerID, container)
 
 	logWithPrefix(repo, "Successfully recreated devcontainer for issue container %s", containerID)
