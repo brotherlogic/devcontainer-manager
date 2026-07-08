@@ -247,9 +247,8 @@ func syncCacheWithRunning(running map[string]bool) {
 			repoURL := ""
 			branchOrIssue := ""
 			var issueNum int32
-			// If cid contains a dash and the part after the dash is a number, it's likely an issue container
 			if idx := strings.LastIndex(cid, "-"); idx != -1 {
-				if val, err := strconv.Atoi(cid[idx+1:]); err == nil {
+				if val, err := strconv.ParseInt(cid[idx+1:], 10, 32); err == nil {
 					branchOrIssue = cid[idx+1:]
 					issueNum = int32(val)
 				}
@@ -1342,7 +1341,7 @@ func recreateIssueContainer(ctx context.Context, owner, repoName, branchName, co
 
 	var issueNum int32
 	if idx := strings.LastIndex(containerID, "-"); idx != -1 {
-		if val, err := strconv.Atoi(containerID[idx+1:]); err == nil {
+		if val, err := strconv.ParseInt(containerID[idx+1:], 10, 32); err == nil {
 			issueNum = int32(val)
 		}
 	}
