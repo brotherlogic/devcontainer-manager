@@ -60,6 +60,9 @@ func NewServer(cache *Cache) *Server {
 
 // List returns the list of all containers stored in the cache.
 func (s *Server) List(ctx context.Context, req *proto.ListRequest) (*proto.ListResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return &proto.ListResponse{
 		Configs: s.cache.List(),
 	}, nil
