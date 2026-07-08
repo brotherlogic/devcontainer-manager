@@ -25,6 +25,8 @@ const (
 // DashboardServiceClient is the client API for DashboardService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// Deprecated: Do not use.
 type DashboardServiceClient interface {
 	ListContainers(ctx context.Context, in *ListContainersRequest, opts ...grpc.CallOption) (*ListContainersResponse, error)
 }
@@ -33,6 +35,7 @@ type dashboardServiceClient struct {
 	cc grpc.ClientConnInterface
 }
 
+// Deprecated: Do not use.
 func NewDashboardServiceClient(cc grpc.ClientConnInterface) DashboardServiceClient {
 	return &dashboardServiceClient{cc}
 }
@@ -50,6 +53,8 @@ func (c *dashboardServiceClient) ListContainers(ctx context.Context, in *ListCon
 // DashboardServiceServer is the server API for DashboardService service.
 // All implementations must embed UnimplementedDashboardServiceServer
 // for forward compatibility.
+//
+// Deprecated: Do not use.
 type DashboardServiceServer interface {
 	ListContainers(context.Context, *ListContainersRequest) (*ListContainersResponse, error)
 	mustEmbedUnimplementedDashboardServiceServer()
@@ -75,6 +80,7 @@ type UnsafeDashboardServiceServer interface {
 	mustEmbedUnimplementedDashboardServiceServer()
 }
 
+// Deprecated: Do not use.
 func RegisterDashboardServiceServer(s grpc.ServiceRegistrar, srv DashboardServiceServer) {
 	// If the following call panics, it indicates UnimplementedDashboardServiceServer was
 	// embedded by pointer and is nil.  This will cause panics if an

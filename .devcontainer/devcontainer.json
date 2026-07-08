@@ -1,5 +1,5 @@
 {
-	"name": "Devcontainer Manager",
+	"name": "devcontainer-manager",
     "image": "mcr.microsoft.com/devcontainers/base:noble",
     "features": {
 		"ghcr.io/devcontainers/features/common-utils:2": {
@@ -18,7 +18,7 @@
 			]
 		}
 	},
-	"initializeCommand": "echo \"GH_TOKEN=$(gh auth token)\" > .devcontainer/.env.auth",
+"initializeCommand": "cat ~/.seraphine-automation > .devcontainer/.env.auth",
 	"runArgs": [
 		"--network=host",
 		"--security-opt",

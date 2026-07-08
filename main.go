@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -45,6 +46,8 @@ func getGHClient() (*github.Client, error) {
 		return nil, fmt.Errorf("GITHUB_TOKEN is not set")
 	}
 
+
+
 	ts := oauth2.StaticTokenSource(
 		&oauth2.Token{AccessToken: token},
 	)
@@ -66,11 +69,58 @@ var commandRunner = func(name string, args ...string) ([]byte, error) {
 	return cmd.CombinedOutput()
 }
 
+type DevpodWorkspace struct {
+	ID     string `json:"id"`
+	UID    string `json:"uid"`
+	Source struct {
+		GitRepository string `json:"gitRepository"`
+	} `json:"source"`
+}
+
+func listDevpodWorkspaces() ([]DevpodWorkspace, error) {
+	out, err := commandRunner(devpodExe, "list", "--output", "json")
+	if err != nil {
+		return nil, err
+	}
+	
+	outStr := string(out)
+	// Strip ANSI escape codes
+	re := regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+	outStr = re.ReplaceAllString(outStr, "")
+
+	var workspaces []DevpodWorkspace
+	if err := json.Unmarshal([]byte(outStr), &workspaces); err != nil {
+		lines := strings.Split(outStr, "\n")
+		var found bool
+		for i, line := range lines {
+			if strings.HasPrefix(strings.TrimSpace(line), "[") {
+				if err2 := json.Unmarshal([]byte(strings.Join(lines[i:], "\n")), &workspaces); err2 == nil {
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			start := strings.Index(outStr, "[")
+			end := strings.LastIndex(outStr, "]")
+			if start != -1 && end != -1 && end >= start {
+				if err3 := json.Unmarshal([]byte(outStr[start:end+1]), &workspaces); err3 == nil {
+					found = true
+				}
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("failed to parse devpod list json: %w", err)
+		}
+	}
+	return workspaces, nil
+}
+
 var gitHubClientProvider = getGHClient
 
 var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, owner, repoName string) ([]*github.Issue, error) {
 	repoPath := fmt.Sprintf("%s/%s", owner, repoName)
-	out, err := commandRunner("gh", "issue", "list", "-R", repoPath, "--state", "open", "--json", "number,title,labels")
+	out, err := commandRunner("gh", "issue", "list", "-R", repoPath, "--state", "open", "--json", "number,title,labels,assignees")
 	if err == nil {
 		var rawIssues []struct {
 			Number int    `json:"number"`
@@ -78,6 +128,9 @@ var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, ow
 			Labels []struct {
 				Name string `json:"name"`
 			} `json:"labels"`
+			Assignees []struct {
+				Login string `json:"login"`
+			} `json:"assignees"`
 		}
 		if errUnmarshal := json.Unmarshal(out, &rawIssues); errUnmarshal == nil {
 			var issues []*github.Issue
@@ -91,10 +144,23 @@ var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, ow
 						Name: &name,
 					})
 				}
+				var assignees []*github.User
+				for _, a := range raw.Assignees {
+					login := a.Login
+					assignees = append(assignees, &github.User{
+						Login: &login,
+					})
+				}
+				var assignee *github.User
+				if len(assignees) > 0 {
+					assignee = assignees[0]
+				}
 				issues = append(issues, &github.Issue{
-					Number: &num,
-					Title:  &title,
-					Labels: labels,
+					Number:    &num,
+					Title:     &title,
+					Labels:    labels,
+					Assignee:  assignee,
+					Assignees: assignees,
 				})
 			}
 			return issues, nil
@@ -251,6 +317,20 @@ func main() {
 	}
 	defer srv.GracefulStop()
 
+	go func() {
+		for {
+			log.Printf("Running periodic docker system prune...")
+			cmd := exec.Command("docker", "system", "prune", "-af", "--volumes")
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				log.Printf("Docker prune failed: %v\nOutput: %s", err, string(output))
+			} else {
+				log.Printf("Docker prune succeeded")
+			}
+			time.Sleep(24 * time.Hour)
+		}
+	}()
+
 	for {
 		err := run(context.Background(), cfg)
 		if err != nil {
@@ -294,17 +374,14 @@ func run(ctx context.Context, cfg *config) error {
 	}
 
 	// Get running devcontainers
-	out, err := commandRunner(devpodExe, "list")
+	workspaces, err := listDevpodWorkspaces()
 	if err != nil {
 		return fmt.Errorf("failed to list devcontainers: %w", err)
 	}
 
 	running := make(map[string]bool)
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) > 0 {
-			running[fields[0]] = true
-		}
+	for _, w := range workspaces {
+		running[w.ID] = true
 	}
 	syncCacheWithRunning(running)
 
@@ -440,6 +517,10 @@ func run(ctx context.Context, cfg *config) error {
 								continue
 							}
 
+							if len(issue.Assignees) == 0 && issue.GetAssignee() == nil {
+								continue
+							}
+
 							issueNumber := issue.GetNumber()
 							containerID := fmt.Sprintf("%s-%d", id, issueNumber)
 
@@ -452,7 +533,7 @@ func run(ctx context.Context, cfg *config) error {
 								log.Printf("Discovered new issue #%d labeled 'seraphine' in %s. Provisioning container...", issueNumber, repo)
 								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-creating", []string{"container-ready", "container-failed"})
 
-								slug, err := deriveFeatureSlug(ctx, issue.GetTitle())
+								slug, err := deriveFeatureSlug(issue.GetTitle())
 								if err != nil {
 									log.Printf("Failed to derive branch slug for issue %d: %v", issueNumber, err)
 									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
@@ -535,7 +616,7 @@ func run(ctx context.Context, cfg *config) error {
 									}
 								}
 							} else {
-								slug, err := deriveFeatureSlug(ctx, issue.GetTitle())
+								slug, err := deriveFeatureSlug(issue.GetTitle())
 								if err != nil {
 									log.Printf("Failed to derive branch slug for issue %d: %v", issueNumber, err)
 									continue
@@ -582,16 +663,8 @@ func run(ctx context.Context, cfg *config) error {
 			projectRepoMap[pID] = repo
 		}
 
-		outList, errList := commandRunner(devpodExe, "list")
+		workspaces, errList := listDevpodWorkspaces()
 		if errList == nil {
-			containerStates := make(map[string]string)
-			for _, line := range strings.Split(string(outList), "\n") {
-				fields := strings.Fields(line)
-				if len(fields) > 1 {
-					containerStates[fields[0]] = fields[1]
-				}
-			}
-
 			// 1. Hibernation Logic
 			type issueContainer struct {
 				id        string
@@ -600,26 +673,36 @@ func run(ctx context.Context, cfg *config) error {
 			}
 			var runningIssues []issueContainer
 
-			for id, state := range containerStates {
-				if state == "Running" {
-					lastIdx := strings.LastIndex(id, "-")
-					if lastIdx != -1 {
-						projectID := id[:lastIdx]
-						issueNumber, errNum := strconv.Atoi(id[lastIdx+1:])
-						repo := projectRepoMap[projectID]
-						if errNum == nil && repo != "" {
-							partsRepo := strings.Split(repo, "/")
-							if len(partsRepo) == 2 {
-								owner, repoName := partsRepo[0], partsRepo[1]
-								issue, _, errGet := client.Issues.Get(ctx, owner, repoName, issueNumber)
-								if errGet == nil {
-									runningIssues = append(runningIssues, issueContainer{
-										id:        id,
-										repo:      repo,
-										updatedAt: issue.GetUpdatedAt().Time,
-									})
-								}
-							}
+			for _, w := range workspaces {
+				id := w.ID
+				lastIdx := strings.LastIndex(id, "-")
+				if lastIdx == -1 {
+					log.Printf("Debug: Skipping devpod %s: ID does not contain a hyphen for issue number separation", id)
+					continue
+				}
+				projectID := id[:lastIdx]
+				repo := projectRepoMap[projectID]
+				if repo == "" {
+					continue
+				}
+				issueNumber, errNum := strconv.Atoi(id[lastIdx+1:])
+				if errNum != nil {
+					log.Printf("Debug: Skipping devpod %s: Failed to parse issue number from ID '%s': %v", id, id[lastIdx+1:], errNum)
+					continue
+				}
+				if repo != "" {
+					partsRepo := strings.Split(repo, "/")
+					if len(partsRepo) == 2 {
+						owner, repoName := partsRepo[0], partsRepo[1]
+						issue, _, errGet := client.Issues.Get(ctx, owner, repoName, issueNumber)
+						if errGet == nil {
+							runningIssues = append(runningIssues, issueContainer{
+								id:        id,
+								repo:      repo,
+								updatedAt: issue.GetUpdatedAt().Time,
+							})
+						} else {
+							log.Printf("Debug: Skipping devpod %s: Failed to get issue %d from %s: %v", id, issueNumber, repo, errGet)
 						}
 					}
 				}
@@ -641,7 +724,8 @@ func run(ctx context.Context, cfg *config) error {
 			}
 
 			// 2. Cleanup Logic
-			for id := range containerStates {
+			for _, w := range workspaces {
+				id := w.ID
 				lastIdx := strings.LastIndex(id, "-")
 				if lastIdx != -1 {
 					projectID := id[:lastIdx]
@@ -697,7 +781,7 @@ func run(ctx context.Context, cfg *config) error {
 		}
 
 	// 3. Extra Cleanup Logic for (a) not in template list (accounting for issues), and (b) use HTTP source
-	listOut, listErr := commandRunner(devpodExe, "list")
+	workspaces, listErr := listDevpodWorkspaces()
 	if listErr == nil {
 		validProjectNames := make(map[string]bool)
 		for _, r := range repos {
@@ -705,21 +789,16 @@ func run(ctx context.Context, cfg *config) error {
 			validProjectNames[rParts[len(rParts)-1]] = true
 		}
 
-		for _, line := range strings.Split(string(listOut), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "-") || strings.Contains(line, "NAME") {
-				continue
-			}
-			parts := strings.Split(line, "|")
-			if len(parts) >= 2 {
-				cName := strings.TrimSpace(parts[0])
-				cSource := strings.TrimSpace(parts[1])
-				if cName != "" {
-					// Check (b): Uses HTTP source
-					isHTTPSource := strings.Contains(cSource, "https://github.com/") || strings.Contains(cSource, "http://") || strings.Contains(cSource, "https://")
+		for _, w := range workspaces {
+			cName := w.ID
+			cSource := w.Source.GitRepository
+			if cName != "" {
+				// Check (b): Uses HTTP source
+				u, errURL := url.Parse(cSource)
+				isHTTPSource := errURL == nil && (u.Scheme == "http" || u.Scheme == "https")
 
-					// Check (a): Not in the container list (accounting for issues)
-					inList := validProjectNames[cName] || validIssueContainers[cName]
+				// Check (a): Not in the container list (accounting for issues)
+				inList := validProjectNames[cName] || validIssueContainers[cName]
 
 					if !inList || isHTTPSource {
 						cRepo := getRepoForID(cName, projectRepoMap)
@@ -741,7 +820,6 @@ func run(ctx context.Context, cfg *config) error {
 				}
 			}
 		}
-	}
 
 	if trackedSHAsChanged {
 		if errSave := saveTrackedSHAs(trackedSHAs); errSave != nil {
@@ -1345,10 +1423,6 @@ func injectStartupCommand(ctx context.Context, repo string, id string, startupCm
 				if lastIdx != -1 {
 					if _, errNum := strconv.Atoi(id[lastIdx+1:]); errNum == nil {
 						baseID := id[:lastIdx]
-						// If the project ID is devcontainer-manager, the tmux session is named "dcm"
-						if baseID == "devcontainer-manager" {
-							baseID = "dcm"
-						}
 						fallbackOut, fallbackErr := runCommandWithLog(repo, devpodExe, "ssh", id, "--command", fmt.Sprintf("tmux has-session -t %s", baseID))
 						if fallbackErr == nil {
 							err = nil
@@ -1374,55 +1448,43 @@ func injectStartupCommand(ctx context.Context, repo string, id string, startupCm
 	}
 }
 
-type slugDeriver struct {
-	runAgy func(ctx context.Context, prompt string) ([]byte, error)
-}
-
-func (sd *slugDeriver) derive(ctx context.Context, title string) (string, error) {
-	prompt := fmt.Sprintf("Given the GitHub issue title: '%s', generate a 3-word slug summarizing the feature. Output exactly three lowercase words separated by underscores, with no other text, punctuation, or explanation.", title)
-	output, err := sd.runAgy(ctx, prompt)
-	if err != nil {
-		return "", err
-	}
-
-	slug := strings.TrimSpace(string(output))
-	slug = strings.ToLower(slug)
-
+func deriveFeatureSlug(title string) (string, error) {
+	title = strings.ToLower(title)
 	var sb strings.Builder
-	for _, r := range slug {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+	for _, r := range title {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
 			sb.WriteRune(r)
-		}
-	}
-	cleaned := sb.String()
-
-	parts := strings.Split(cleaned, "_")
-	var words []string
-	for _, part := range parts {
-		if part != "" {
-			words = append(words, part)
+		} else {
+			sb.WriteRune(' ')
 		}
 	}
 
-	if len(words) != 3 {
-		return "", fmt.Errorf("derived slug %q is invalid: must have exactly 3 words, got %d", cleaned, len(words))
+	words := strings.Fields(sb.String())
+	var filtered []string
+	stopWords := map[string]bool{
+		"the": true, "a": true, "an": true, "to": true, "of": true,
+		"in": true, "for": true, "on": true, "with": true, "and": true,
+		"is": true, "it": true, "use": true, "add": true, "fix": true,
+	}
+	for _, w := range words {
+		if !stopWords[w] {
+			filtered = append(filtered, w)
+		}
 	}
 
-	return strings.Join(words, "_"), nil
-}
+	if len(filtered) == 0 {
+		filtered = words
+	}
 
-var defaultDeriver = &slugDeriver{
-	runAgy: func(ctx context.Context, prompt string) ([]byte, error) {
-		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "agy", "--prompt", prompt)
-		cmd.WaitDelay = time.Second
-		return cmd.Output()
-	},
-}
+	if len(filtered) > 3 {
+		filtered = filtered[:3]
+	}
 
-func deriveFeatureSlug(ctx context.Context, title string) (string, error) {
-	return defaultDeriver.derive(ctx, title)
+	for len(filtered) < 3 {
+		filtered = append(filtered, "feature")
+	}
+
+	return strings.Join(filtered, "_"), nil
 }
 
 func ensureIssueBranchExists(ctx context.Context, client *github.Client, owner, repoName, branchName string) error {
@@ -1513,10 +1575,29 @@ func adjustIssueLabels(ctx context.Context, client *github.Client, owner, repo s
 	}
 }
 
-func renameDockerContainer(containerID string) {
-	log.Printf("Attempting to rename docker container to %s...", containerID)
+func renameDockerContainer(workspaceID string) {
+	log.Printf("Attempting to rename docker container to %s...", workspaceID)
 
-	out, err := commandRunner("docker", "ps", "--format", "{{.ID}}|{{.Names}}|{{.Image}}|{{.Labels}}")
+	workspaces, err := listDevpodWorkspaces()
+	if err != nil {
+		log.Printf("Error fetching devpod workspaces: %v", err)
+		return
+	}
+
+	var targetUid string
+	for _, w := range workspaces {
+		if w.ID == workspaceID {
+			targetUid = w.UID
+			break
+		}
+	}
+
+	if targetUid == "" {
+		log.Printf("Could not find devpod workspace uid for %s", workspaceID)
+		return
+	}
+
+	out, err := commandRunner("docker", "ps", "--format", "{{.ID}}|{{.Names}}|{{.Labels}}")
 	if err != nil {
 		log.Printf("Error running docker ps: %v", err)
 		return
@@ -1530,87 +1611,29 @@ func renameDockerContainer(containerID string) {
 			continue
 		}
 		parts := strings.Split(line, "|")
-		if len(parts) >= 4 {
-			id, name, labels := parts[0], parts[1], parts[3]
-			if strings.Contains(labels, fmt.Sprintf("%s%s", DevpodLabelPrefix, containerID)) ||
-				strings.Contains(labels, fmt.Sprintf("%s%s", VscLabelPrefix, containerID)) {
+		if len(parts) >= 3 {
+			id, name, labels := parts[0], parts[1], parts[2]
+			if strings.Contains(labels, fmt.Sprintf("dev.containers.id=%s", targetUid)) {
 				targetID, currentName = id, name
 				break
 			}
 		}
 	}
 
-	if targetID == "" {
-		for _, line := range lines {
-			if line == "" {
-				continue
-			}
-			parts := strings.Split(line, "|")
-			if len(parts) >= 4 {
-				id, name, labels := parts[0], parts[1], parts[3]
-				if name == containerID {
-					// Only use name match if it doesn't explicitly belong to another workspace
-					if !strings.Contains(labels, DevpodLabelPrefix) && !strings.Contains(labels, VscLabelPrefix) {
-						targetID, currentName = id, name
-						break
-					}
-				}
-			}
-		}
-	}
-
-	if targetID == "" {
-		for _, line := range lines {
-			if line == "" {
-				continue
-			}
-			parts := strings.Split(line, "|")
-			if len(parts) >= 4 {
-				id, name, image, labels := parts[0], parts[1], parts[2], parts[3]
-				if strings.Contains(labels, DevpodLabelPrefix) || strings.Contains(labels, VscLabelPrefix) {
-					continue
-				}
-				if strings.Contains(image, "devpod-") && name != containerID {
-					targetID, currentName = id, name
-					break
-				}
-			}
-		}
-	}
-
-	if targetID == "" {
-		for _, line := range lines {
-			if line == "" {
-				continue
-			}
-			parts := strings.Split(line, "|")
-			if len(parts) >= 4 {
-				id, name, image, labels := parts[0], parts[1], parts[2], parts[3]
-				if strings.Contains(labels, DevpodLabelPrefix) || strings.Contains(labels, VscLabelPrefix) {
-					continue
-				}
-				if strings.Contains(image, "vsc-content") && name != containerID {
-					targetID, currentName = id, name
-					break
-				}
-			}
-		}
-	}
-
 	if targetID != "" {
-		if currentName == containerID {
-			log.Printf("Container %s is already named %s", targetID, containerID)
+		if currentName == workspaceID {
+			log.Printf("Container %s is already named %s", targetID, workspaceID)
 			return
 		}
 
-		log.Printf("Renaming container %s (currently %s) to %s", targetID, currentName, containerID)
-		if _, err := commandRunner("docker", "rename", targetID, containerID); err != nil {
+		log.Printf("Renaming container %s (currently %s) to %s", targetID, currentName, workspaceID)
+		if _, err := commandRunner("docker", "rename", targetID, workspaceID); err != nil {
 			log.Printf("Failed to rename container: %v", err)
 		} else {
-			log.Printf("Successfully renamed container to %s", containerID)
+			log.Printf("Successfully renamed container to %s", workspaceID)
 		}
 	} else {
-		log.Printf("Could not identify which container to rename for %s", containerID)
+		log.Printf("Could not identify which docker container corresponds to devpod uid %s for %s", targetUid, workspaceID)
 	}
 }
 

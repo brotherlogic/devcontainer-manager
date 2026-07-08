@@ -79,83 +79,15 @@ func TestParseFlags_MaxConcurrencyInvalidValue(t *testing.T) {
 	}
 }
 
-func TestDeriveFeatureSlug_Success(t *testing.T) {
-	var capturedPrompt string
-	sd := &slugDeriver{
-		runAgy: func(ctx context.Context, prompt string) ([]byte, error) {
-			capturedPrompt = prompt
-			return []byte("  Test_Mock_Slug! \n"), nil
-		},
-	}
-
-	slug, err := sd.derive(context.Background(), "My Awesome Feature Title")
+func TestDeriveFeatureSlug(t *testing.T) {
+	slug, err := deriveFeatureSlug("My Awesome Feature Title")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expectedSlug := "test_mock_slug"
+	expectedSlug := "my_awesome_feature"
 	if slug != expectedSlug {
 		t.Errorf("expected slug %q, got %q", expectedSlug, slug)
-	}
-
-	expectedPrompt := "Given the GitHub issue title: 'My Awesome Feature Title', generate a 3-word slug summarizing the feature. Output exactly three lowercase words separated by underscores, with no other text, punctuation, or explanation."
-	if capturedPrompt != expectedPrompt {
-		t.Errorf("expected prompt %q, got %q", expectedPrompt, capturedPrompt)
-	}
-}
-
-func TestDeriveFeatureSlug_DoubleUnderscores(t *testing.T) {
-	sd := &slugDeriver{
-		runAgy: func(ctx context.Context, prompt string) ([]byte, error) {
-			return []byte("  test__mock__slug \n"), nil
-		},
-	}
-
-	slug, err := sd.derive(context.Background(), "Title")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	expectedSlug := "test_mock_slug"
-	if slug != expectedSlug {
-		t.Errorf("expected slug %q, got %q", expectedSlug, slug)
-	}
-}
-
-func TestDeriveFeatureSlug_InvalidWordCount(t *testing.T) {
-	// Case 1: 2 words
-	sd1 := &slugDeriver{
-		runAgy: func(ctx context.Context, prompt string) ([]byte, error) {
-			return []byte("too_short"), nil
-		},
-	}
-	_, err := sd1.derive(context.Background(), "Title")
-	if err == nil {
-		t.Error("expected error for 2-word slug, got nil")
-	}
-
-	// Case 2: 4 words
-	sd2 := &slugDeriver{
-		runAgy: func(ctx context.Context, prompt string) ([]byte, error) {
-			return []byte("this_is_too_long"), nil
-		},
-	}
-	_, err = sd2.derive(context.Background(), "Title")
-	if err == nil {
-		t.Error("expected error for 4-word slug, got nil")
-	}
-}
-
-func TestDeriveFeatureSlug_Error(t *testing.T) {
-	sd := &slugDeriver{
-		runAgy: func(ctx context.Context, prompt string) ([]byte, error) {
-			return nil, fmt.Errorf("agy execution failed")
-		},
-	}
-
-	_, err := sd.derive(context.Background(), "Some title")
-	if err == nil {
-		t.Error("expected error from deriveFeatureSlug, got nil")
 	}
 }
 
@@ -281,17 +213,12 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 		capturedCommands = append(capturedCommands, append([]string{name}, args...))
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			// Return list containing only the standard container (not the issue container)
-			return []byte("test-repo Running\n"), nil
+			return []byte(`[{"id": "test-repo"}]`), nil
 		}
 		return []byte("success"), nil
 	}
 
-	// Mock agy command slug derivation
-	originalDeriverRunAgy := defaultDeriver.runAgy
-	defer func() { defaultDeriver.runAgy = originalDeriverRunAgy }()
-	defaultDeriver.runAgy = func(ctx context.Context, prompt string) ([]byte, error) {
-		return []byte("mock_feature_slug"), nil
-	}
+
 
 	// Setup GitHub API mock responses
 	// 1. Fetching open issues
@@ -304,6 +231,7 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 				"number": 42,
 				"title": "My Awesome Feature",
 				"labels": [{"name": "seraphine-feature"}],
+				"assignees": [{"login": "user1"}],
 				"created_at": "2023-01-01T00:00:00Z"
 			}
 		]`)
@@ -361,11 +289,11 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 	})
 
 	// 2. Fetching target branch (returns 200 OK so ensureIssueBranchExists passes immediately)
-	mux.HandleFunc("/repos/test-owner/test-repo/git/ref/heads/feature/mock_feature_slug_42", func(w http.ResponseWriter, r *http.Request) {
-		t.Logf("Mock GitHub API: GET /repos/test-owner/test-repo/git/ref/heads/feature/mock_feature_slug_42 called")
+	mux.HandleFunc("/repos/test-owner/test-repo/git/ref/heads/feature/my_awesome_feature_42", func(w http.ResponseWriter, r *http.Request) {
+		t.Logf("Mock GitHub API: GET /repos/test-owner/test-repo/git/ref/heads/feature/my_awesome_feature_42 called")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"ref": "refs/heads/feature/mock_feature_slug_42", "object": {"sha": "latest_sha"}}`)
+		fmt.Fprint(w, `{"ref": "refs/heads/feature/my_awesome_feature_42", "object": {"sha": "latest_sha"}}`)
 	})
 
 	// 3. Mock get repo composite SHA (bypass to keep test simple, returning 404/not found or composite SHA)
@@ -395,7 +323,7 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 	for _, cmd := range capturedCommands {
 		if cmd[0] == devpodExe && cmd[1] == "up" {
 			devpodUpCalled = true
-			expectedURL := "git@github.com:test-owner/test-repo@feature/mock_feature_slug_42"
+			expectedURL := "git@github.com:test-owner/test-repo@feature/my_awesome_feature_42"
 			if cmd[2] != expectedURL {
 				t.Errorf("expected URL %q, got %q", expectedURL, cmd[2])
 			}
@@ -480,12 +408,7 @@ func TestRun_SkipLaunchIfAlreadyActive(t *testing.T) {
 		return client, nil
 	}
 
-	// Mock agy command slug derivation
-	originalDeriverRunAgy := defaultDeriver.runAgy
-	defer func() { defaultDeriver.runAgy = originalDeriverRunAgy }()
-	defaultDeriver.runAgy = func(ctx context.Context, prompt string) ([]byte, error) {
-		return []byte("mock_feature_slug"), nil
-	}
+
 
 	// Mock commandRunner
 	originalCommandRunner := commandRunner
@@ -496,7 +419,7 @@ func TestRun_SkipLaunchIfAlreadyActive(t *testing.T) {
 		capturedCommands = append(capturedCommands, append([]string{name}, args...))
 		if name == "devpod" && len(args) > 0 && args[0] == "list" {
 			// Return list containing both standard and issue containers running
-			return []byte("test-repo Running\ntest-repo-42 Running\n"), nil
+			return []byte(`[{"id": "test-repo"}, {"id": "test-repo-42"}]`), nil
 		}
 		return []byte("success"), nil
 	}
@@ -509,7 +432,8 @@ func TestRun_SkipLaunchIfAlreadyActive(t *testing.T) {
 			{
 				"number": 42,
 				"title": "My Awesome Feature",
-				"labels": [{"name": "seraphine-feature"}]
+				"labels": [{"name": "seraphine-feature"}],
+				"assignees": [{"login": "user1"}]
 			}
 		]`)
 	})
@@ -582,7 +506,7 @@ func TestRun_HibernationOfOldestContainers(t *testing.T) {
 		capturedCommands = append(capturedCommands, append([]string{name}, args...))
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			// Return list containing standard container and 3 running issue containers
-			return []byte("test-repo Running\ntest-repo-1 Running\ntest-repo-2 Running\ntest-repo-3 Running\n"), nil
+			return []byte(`[{"id": "test-repo"}, {"id": "test-repo-1"}, {"id": "test-repo-2"}, {"id": "test-repo-3"}]`), nil
 		}
 		return []byte("success"), nil
 	}
@@ -591,7 +515,7 @@ func TestRun_HibernationOfOldestContainers(t *testing.T) {
 	mux.HandleFunc("/repos/test-owner/test-repo/issues/1", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"number": 1, "state": "open", "updated_at": "2026-05-31T12:00:00Z", "labels": [{"name": "seraphine"}]}`)
+		fmt.Fprint(w, `{"number": 1, "state": "open", "updated_at": "2026-05-31T12:00:00Z", "labels": [{"name": "seraphine"}], "assignees": [{"login": "user1"}]}`)
 	})
 	mux.HandleFunc("/repos/test-owner/test-repo/issues/2", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -680,7 +604,7 @@ func TestRun_CleanupOfClosedOrUnlabeledContainers(t *testing.T) {
 		capturedCommands = append(capturedCommands, append([]string{name}, args...))
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			// Return list containing standard container and 1 running issue container (issue 4)
-			return []byte("test-repo Running\ntest-repo-4 Running\n"), nil
+			return []byte(`[{"id": "test-repo"}, {"id": "test-repo-4"}]`), nil
 		}
 		return []byte("success"), nil
 	}
@@ -797,7 +721,7 @@ func TestRun_InjectStartupCommand(t *testing.T) {
 		capturedCommands = append(capturedCommands, append([]string{name}, args...))
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			// Container is not running initially
-			return []byte(""), nil
+			return []byte("[]"), nil
 		}
 		if name == devpodExe && len(args) >= 4 && args[0] == "ssh" && args[2] == "--command" {
 			cmdStr := args[3]
@@ -900,7 +824,7 @@ func TestRun_InjectStartupCommandTimeout(t *testing.T) {
 		capturedCommands = append(capturedCommands, append([]string{name}, args...))
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			// Container is not running initially
-			return []byte(""), nil
+			return []byte("[]"), nil
 		}
 		if name == devpodExe && len(args) >= 4 && args[0] == "ssh" && args[2] == "--command" {
 			cmdStr := args[3]
@@ -977,7 +901,7 @@ func TestRun_ScanAndLaunchIssueContainer_Failure(t *testing.T) {
 
 	commandRunner = func(name string, args ...string) ([]byte, error) {
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
-			return []byte("test-repo Running\n"), nil
+			return []byte(`[{"id": "test-repo"}]`), nil
 		}
 		if name == devpodExe && len(args) > 0 && args[0] == "up" {
 			return []byte("failed to start container"), fmt.Errorf("up failed")
@@ -986,11 +910,7 @@ func TestRun_ScanAndLaunchIssueContainer_Failure(t *testing.T) {
 	}
 
 	// Mock agy command slug derivation
-	originalDeriverRunAgy := defaultDeriver.runAgy
-	defer func() { defaultDeriver.runAgy = originalDeriverRunAgy }()
-	defaultDeriver.runAgy = func(ctx context.Context, prompt string) ([]byte, error) {
-		return []byte("mock_feature_slug"), nil
-	}
+
 
 	// Setup GitHub API mock responses
 	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
@@ -1000,7 +920,8 @@ func TestRun_ScanAndLaunchIssueContainer_Failure(t *testing.T) {
 			{
 				"number": 42,
 				"title": "My Awesome Feature",
-				"labels": [{"name": "seraphine-feature"}]
+				"labels": [{"name": "seraphine-feature"}],
+				"assignees": [{"login": "user1"}]
 			}
 		]`)
 	})
@@ -1041,10 +962,10 @@ func TestRun_ScanAndLaunchIssueContainer_Failure(t *testing.T) {
 		}
 	})
 
-	mux.HandleFunc("/repos/test-owner/test-repo/git/ref/heads/feature/mock_feature_slug_42", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repos/test-owner/test-repo/git/ref/heads/feature/my_awesome_feature_42", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"ref": "refs/heads/feature/mock_feature_slug_42", "object": {"sha": "latest_sha"}}`)
+		fmt.Fprint(w, `{"ref": "refs/heads/feature/my_awesome_feature_42", "object": {"sha": "latest_sha"}}`)
 	})
 
 	mux.HandleFunc("/repos/test-owner/test-repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
@@ -1151,11 +1072,7 @@ func TestRun_RecreateIssueContainerOnHashChange(t *testing.T) {
 	}()
 
 	// Mock agy command slug derivation
-	originalDeriverRunAgy := defaultDeriver.runAgy
-	defer func() { defaultDeriver.runAgy = originalDeriverRunAgy }()
-	defaultDeriver.runAgy = func(ctx context.Context, prompt string) ([]byte, error) {
-		return []byte("mock_feature_slug"), nil
-	}
+
 
 	// Mock commandRunner
 	originalCommandRunner := commandRunner
@@ -1166,7 +1083,7 @@ func TestRun_RecreateIssueContainerOnHashChange(t *testing.T) {
 		capturedCommands = append(capturedCommands, append([]string{name}, args...))
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			// Container is already running
-			return []byte("test-repo Running\ntest-repo-42 Running\n"), nil
+			return []byte(`[{"id": "test-repo"}, {"id": "test-repo-42"}]`), nil
 		}
 		return []byte("success"), nil
 	}
@@ -1180,7 +1097,8 @@ func TestRun_RecreateIssueContainerOnHashChange(t *testing.T) {
 			{
 				"number": 42,
 				"title": "My Awesome Feature",
-				"labels": [{"name": "seraphine-feature"}]
+				"labels": [{"name": "seraphine-feature"}],
+				"assignees": [{"login": "user1"}]
 			}
 		]`)
 	})
@@ -1189,7 +1107,7 @@ func TestRun_RecreateIssueContainerOnHashChange(t *testing.T) {
 	mux.HandleFunc("/repos/test-owner/test-repo/issues/42", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"number": 42, "state": "open", "updated_at": "2026-05-31T12:00:00Z", "labels": [{"name": "seraphine"}]}`)
+		fmt.Fprint(w, `{"number": 42, "state": "open", "updated_at": "2026-05-31T12:00:00Z", "labels": [{"name": "seraphine"}], "assignees": [{"login": "user1"}]}`)
 	})
 
 	// 3. New devcontainer file contents to produce a NEW SHA (new_sha_456)
@@ -1200,7 +1118,7 @@ func TestRun_RecreateIssueContainerOnHashChange(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		expectedRef := "feature/mock_feature_slug_42"
+		expectedRef := "feature/my_awesome_feature_42"
 		if ref != expectedRef {
 			t.Errorf("expected ref parameter %q, got %q", expectedRef, ref)
 		}
@@ -1232,7 +1150,7 @@ func TestRun_RecreateIssueContainerOnHashChange(t *testing.T) {
 			deleted = true
 		}
 		if cmd[0] == devpodExe && cmd[1] == "up" {
-			expectedURL := "git@github.com:test-owner/test-repo@feature/mock_feature_slug_42"
+			expectedURL := "git@github.com:test-owner/test-repo@feature/my_awesome_feature_42"
 			if len(cmd) > 2 && cmd[2] == expectedURL && cmd[4] == "test-repo-42" {
 				recreated = true
 			}
@@ -1271,8 +1189,10 @@ func TestRenameDockerContainer_Success(t *testing.T) {
 	commandRunner = func(name string, args ...string) ([]byte, error) {
 		capturedCommands = append(capturedCommands, append([]string{name}, args...))
 		if name == "docker" && len(args) > 0 && args[0] == "ps" {
-			// Return mock docker ps output with Devpod labels matching our container ID
-			return []byte("container_id_123|devpod-temp-name|some-image|sh.loft.devpod.workspace.id=test-repo_42,some-other-label\n"), nil
+			return []byte("container_id_123|devpod-temp-name|dev.containers.id=test-repo_42,some-other-label\n"), nil
+		}
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			return []byte(`[{"id": "test-repo_42", "uid": "test-repo_42"}]`), nil
 		}
 		return []byte("success"), nil
 	}
@@ -1306,7 +1226,10 @@ func TestRenameDockerContainer_AlreadyNamedCorrectly(t *testing.T) {
 	commandRunner = func(name string, args ...string) ([]byte, error) {
 		capturedCommands = append(capturedCommands, append([]string{name}, args...))
 		if name == "docker" && len(args) > 0 && args[0] == "ps" {
-			return []byte("container_id_123|test-repo_42|some-image|sh.loft.devpod.workspace.id=test-repo_42,some-other-label\n"), nil
+			return []byte("container_id_123|test-repo_42|dev.containers.id=test-repo_42,some-other-label\n"), nil
+		}
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			return []byte(`[{"id": "test-repo_42", "uid": "test-repo_42"}]`), nil
 		}
 		return []byte("success"), nil
 	}
@@ -1563,7 +1486,7 @@ func TestRun_ConcurrencySemaphoreLimit(t *testing.T) {
 	commandRunner = func(name string, args ...string) ([]byte, error) {
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			// devcontainers list: return empty so it tries to start all of them
-			return []byte(""), nil
+			return []byte("[]"), nil
 		}
 		if name == devpodExe && len(args) > 0 && args[0] == "up" {
 			currentActive := atomic.AddInt32(&activeRuns, 1)
@@ -1638,7 +1561,7 @@ func TestListOpenIssuesProvider_Success(t *testing.T) {
 		t.Errorf("expected commandName 'gh', got '%s'", commandName)
 	}
 
-	expectedArgs := []string{"issue", "list", "-R", "brotherlogic/devcontainer-manager", "--state", "open", "--json", "number,title,labels"}
+	expectedArgs := []string{"issue", "list", "-R", "brotherlogic/devcontainer-manager", "--state", "open", "--json", "number,title,labels,assignees"}
 	if len(commandArgs) != len(expectedArgs) {
 		t.Fatalf("expected %d args, got %d", len(expectedArgs), len(commandArgs))
 	}
@@ -1767,16 +1690,12 @@ func TestRun_ScanAndLaunchIssueContainer_LatencyCommentExists(t *testing.T) {
 
 	commandRunner = func(name string, args ...string) ([]byte, error) {
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
-			return []byte("test-repo Running\n"), nil
+			return []byte(`[{"id": "test-repo"}]`), nil
 		}
 		return []byte("success"), nil
 	}
 
-	originalDeriverRunAgy := defaultDeriver.runAgy
-	defer func() { defaultDeriver.runAgy = originalDeriverRunAgy }()
-	defaultDeriver.runAgy = func(ctx context.Context, prompt string) ([]byte, error) {
-		return []byte("mock_feature_slug"), nil
-	}
+
 
 	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1786,6 +1705,7 @@ func TestRun_ScanAndLaunchIssueContainer_LatencyCommentExists(t *testing.T) {
 				"number": 42,
 				"title": "My Awesome Feature",
 				"labels": [{"name": "seraphine-feature"}],
+				"assignees": [{"login": "user1"}],
 				"created_at": "2023-01-01T00:00:00Z"
 			}
 		]`)
@@ -1815,10 +1735,10 @@ func TestRun_ScanAndLaunchIssueContainer_LatencyCommentExists(t *testing.T) {
 		}
 	})
 
-	mux.HandleFunc("/repos/test-owner/test-repo/git/ref/heads/feature/mock_feature_slug_42", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repos/test-owner/test-repo/git/ref/heads/feature/my_awesome_feature_42", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"ref": "refs/heads/feature/mock_feature_slug_42", "object": {"sha": "latest_sha"}}`)
+		fmt.Fprint(w, `{"ref": "refs/heads/feature/my_awesome_feature_42", "object": {"sha": "latest_sha"}}`)
 	})
 
 	mux.HandleFunc("/repos/test-owner/test-repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
@@ -1892,16 +1812,12 @@ func TestRun_ScanAndLaunchIssueContainer_LatencyCommentError(t *testing.T) {
 			devpodUpCalled = true
 		}
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
-			return []byte("test-repo Running\n"), nil
+			return []byte(`[{"id": "test-repo"}]`), nil
 		}
 		return []byte("success"), nil
 	}
 
-	originalDeriverRunAgy := defaultDeriver.runAgy
-	defer func() { defaultDeriver.runAgy = originalDeriverRunAgy }()
-	defaultDeriver.runAgy = func(ctx context.Context, prompt string) ([]byte, error) {
-		return []byte("mock_feature_slug"), nil
-	}
+
 
 	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1911,6 +1827,7 @@ func TestRun_ScanAndLaunchIssueContainer_LatencyCommentError(t *testing.T) {
 				"number": 42,
 				"title": "My Awesome Feature",
 				"labels": [{"name": "seraphine-feature"}],
+				"assignees": [{"login": "user1"}],
 				"created_at": "2023-01-01T00:00:00Z"
 			}
 		]`)
@@ -1939,10 +1856,10 @@ func TestRun_ScanAndLaunchIssueContainer_LatencyCommentError(t *testing.T) {
 		}
 	})
 
-	mux.HandleFunc("/repos/test-owner/test-repo/git/ref/heads/feature/mock_feature_slug_42", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repos/test-owner/test-repo/git/ref/heads/feature/my_awesome_feature_42", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"ref": "refs/heads/feature/mock_feature_slug_42", "object": {"sha": "latest_sha"}}`)
+		fmt.Fprint(w, `{"ref": "refs/heads/feature/my_awesome_feature_42", "object": {"sha": "latest_sha"}}`)
 	})
 
 	mux.HandleFunc("/repos/test-owner/test-repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
@@ -1968,6 +1885,63 @@ func TestRun_ScanAndLaunchIssueContainer_LatencyCommentError(t *testing.T) {
 
 	if !devpodUpCalled {
 		t.Errorf("expected container to be successfully launched (devpod up) despite API error")
+	}
+}
+
+func TestListDevpodWorkspaces_WithWarnings(t *testing.T) {
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		output := "06:45:43 warn Couldn't load workspace dcrouter: unexpected end of JSON input\n" +
+			"06:45:43 warn Couldn't load workspace gemclust: unexpected end of JSON input\n" +
+			"[\n" +
+			"  {\n" +
+			"    \"id\": \"devcontainer-manager\",\n" +
+			"    \"uid\": \"12345\",\n" +
+			"    \"source\": {\n" +
+			"      \"gitRepository\": \"git@github.com:brotherlogic/devcontainer-manager\"\n" +
+			"    }\n" +
+			"  }\n" +
+			"]"
+		return []byte(output), nil
+	}
+
+	workspaces, err := listDevpodWorkspaces()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(workspaces) != 1 {
+		t.Fatalf("expected 1 workspace, got %d", len(workspaces))
+	}
+
+	if workspaces[0].ID != "devcontainer-manager" {
+		t.Errorf("expected ID devcontainer-manager, got %s", workspaces[0].ID)
+	}
+}
+
+func TestListDevpodWorkspaces_SingleLineJSONWithWarnings(t *testing.T) {
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		output := "06:45:43 warn [Some log output]\n" +
+			"[{\"id\":\"devcontainer-manager\",\"uid\":\"12345\",\"source\":{\"gitRepository\":\"git@github.com:brotherlogic/devcontainer-manager\"}}]"
+		return []byte(output), nil
+	}
+
+	workspaces, err := listDevpodWorkspaces()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(workspaces) != 1 {
+		t.Fatalf("expected 1 workspace, got %d", len(workspaces))
+	}
+
+	if workspaces[0].ID != "devcontainer-manager" {
+		t.Errorf("expected ID devcontainer-manager, got %s", workspaces[0].ID)
 	}
 }
 

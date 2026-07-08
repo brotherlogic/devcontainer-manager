@@ -259,9 +259,9 @@ const file_proto_dashboard_proto_rawDesc = "" +
 	"\bSTARTING\x10\x01\x12\v\n" +
 	"\aRUNNING\x10\x02\x12\n" +
 	"\n" +
-	"\x06FAILED\x10\x032i\n" +
+	"\x06FAILED\x10\x032n\n" +
 	"\x10DashboardService\x12U\n" +
-	"\x0eListContainers\x12 .dashboard.ListContainersRequest\x1a!.dashboard.ListContainersResponseB4Z2github.com/brotherlogic/devcontainer-manager/protob\x06proto3"
+	"\x0eListContainers\x12 .dashboard.ListContainersRequest\x1a!.dashboard.ListContainersResponse\x1a\x03\x88\x02\x01B4Z2github.com/brotherlogic/devcontainer-manager/protob\x06proto3"
 
 var (
 	file_proto_dashboard_proto_rawDescOnce sync.Once
