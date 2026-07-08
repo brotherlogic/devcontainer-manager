@@ -82,9 +82,14 @@ func listDevpodWorkspaces() ([]DevpodWorkspace, error) {
 	if err != nil {
 		return nil, err
 	}
+	
+	outStr := string(out)
+	// Strip ANSI escape codes
+	re := regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+	outStr = re.ReplaceAllString(outStr, "")
+
 	var workspaces []DevpodWorkspace
-	if err := json.Unmarshal(out, &workspaces); err != nil {
-		outStr := string(out)
+	if err := json.Unmarshal([]byte(outStr), &workspaces); err != nil {
 		lines := strings.Split(outStr, "\n")
 		var found bool
 		for i, line := range lines {
