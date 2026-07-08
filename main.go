@@ -246,15 +246,22 @@ func syncCacheWithRunning(running map[string]bool) {
 			// Not in cache, let's try to infer repo url and branch
 			repoURL := ""
 			branchOrIssue := ""
-			// If cid contains a dash and the part after the dash is a number, it's likely an issue container
+			var issueNum int32
 			if idx := strings.LastIndex(cid, "-"); idx != -1 {
-				if _, err := strconv.Atoi(cid[idx+1:]); err == nil {
+				if val, err := strconv.ParseInt(cid[idx+1:], 10, 32); err == nil {
 					branchOrIssue = cid[idx+1:]
+					issueNum = int32(val)
+				}
+			}
+			var identifier *proto.Identifier
+			if issueNum > 0 {
+				identifier = &proto.Identifier{
+					Id: &proto.Identifier_IssueNumber{IssueNumber: issueNum},
 				}
 			}
 			globalCache.Update(cid, &proto.DevcontainerConfig{
 				Id:                  cid,
-				Request:             &proto.UpRequest{Repo: repoURL, Branch: branchOrIssue},
+				Request:             &proto.UpRequest{Repo: repoURL, Branch: branchOrIssue, Identifier: identifier},
 				State:               proto.State_DCM_READY,
 			})
 		}
@@ -546,9 +553,15 @@ func run(ctx context.Context, cfg *config) error {
 								repoURL := fmt.Sprintf("git@github.com:%s/%s@%s", owner, repoName, branchName)
 								logWithPrefix(repo, "Launching issue container %s on branch %s", containerID, branchName)
 								container := &proto.DevcontainerConfig{
-									Id:                  containerID,
-									Request:             &proto.UpRequest{Repo: repoURL, Branch: branchName},
-									State:               proto.State_DCM_CREATING,
+									Id: containerID,
+									Request: &proto.UpRequest{
+										Repo:   repoURL,
+										Branch: branchName,
+										Identifier: &proto.Identifier{
+											Id: &proto.Identifier_IssueNumber{IssueNumber: int32(issueNumber)},
+										},
+									},
+									State: proto.State_DCM_CREATING,
 								}
 								globalCache.Update(containerID, container)
 
@@ -1326,9 +1339,21 @@ func recreateIssueContainer(ctx context.Context, owner, repoName, branchName, co
 	}
 	repoURL := fmt.Sprintf("git@github.com:%s/%s@%s", owner, repoName, branchName)
 
+	var issueNum int32
+	if idx := strings.LastIndex(containerID, "-"); idx != -1 {
+		if val, err := strconv.ParseInt(containerID[idx+1:], 10, 32); err == nil {
+			issueNum = int32(val)
+		}
+	}
+	var identifier *proto.Identifier
+	if issueNum > 0 {
+		identifier = &proto.Identifier{
+			Id: &proto.Identifier_IssueNumber{IssueNumber: issueNum},
+		}
+	}
 	container := &proto.DevcontainerConfig{
 		Id:                  containerID,
-		Request:             &proto.UpRequest{Repo: repoURL, Branch: branchName},
+		Request:             &proto.UpRequest{Repo: repoURL, Branch: branchName, Identifier: identifier},
 		State:               proto.State_DCM_CREATING,
 	}
 	globalCache.Update(containerID, container)

@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/google/go-github/v50/github"
+	"github.com/brotherlogic/devcontainer-manager/proto"
+	srvPkg "github.com/brotherlogic/devcontainer-manager/server"
 )
 
 func TestParseFlags_Defaults(t *testing.T) {
@@ -375,6 +377,39 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 
 	if !latencyCommentPosted {
 		t.Errorf("expected latency comment to be posted upon successful provisioning, but it was not")
+	}
+
+	// Verify ManagerService.List and proto.DevcontainerConfig
+	mgrServer := srvPkg.NewServer(globalCache)
+	listResp, listErr := mgrServer.List(context.Background(), &proto.ListRequest{})
+	if listErr != nil {
+		t.Fatalf("unexpected error calling List: %v", listErr)
+	}
+
+	var foundIssueContainer bool
+	for _, cfg := range listResp.Configs {
+		if cfg.Id == "test-repo-42" {
+			foundIssueContainer = true
+			if cfg.State != proto.State_DCM_READY {
+				t.Errorf("expected state DCM_READY, got %v", cfg.State)
+			}
+			if cfg.Request == nil {
+				t.Errorf("expected request to be populated")
+			} else if cfg.Request.Identifier == nil {
+				t.Errorf("expected request identifier to be populated")
+			} else {
+				if issueId, ok := cfg.Request.Identifier.Id.(*proto.Identifier_IssueNumber); ok {
+					if issueId.IssueNumber != 42 {
+						t.Errorf("expected issue number 42, got %d", issueId.IssueNumber)
+					}
+				} else {
+					t.Errorf("expected identifier to be IssueNumber, got %T", cfg.Request.Identifier.Id)
+				}
+			}
+		}
+	}
+	if !foundIssueContainer {
+		t.Error("expected test-repo-42 in ManagerService.List response")
 	}
 }
 
