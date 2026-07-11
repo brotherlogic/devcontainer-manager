@@ -10,18 +10,18 @@ import (
 // Cache is a thread-safe in-memory cache for storing container status.
 type Cache struct {
 	mu         sync.RWMutex
-	containers map[string]*proto.Container
+	containers map[string]*proto.DevcontainerConfig
 }
 
 // NewCache creates and initializes a new Cache.
 func NewCache() *Cache {
 	return &Cache{
-		containers: make(map[string]*proto.Container),
+		containers: make(map[string]*proto.DevcontainerConfig),
 	}
 }
 
 // Update adds or updates a container status in the cache.
-func (c *Cache) Update(id string, container *proto.Container) {
+func (c *Cache) Update(id string, container *proto.DevcontainerConfig) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.containers[id] = container
@@ -35,19 +35,19 @@ func (c *Cache) Delete(id string) {
 }
 
 // List returns a slice of all container statuses stored in the cache.
-func (c *Cache) List() []*proto.Container {
+func (c *Cache) List() []*proto.DevcontainerConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	list := make([]*proto.Container, 0, len(c.containers))
+	list := make([]*proto.DevcontainerConfig, 0, len(c.containers))
 	for _, container := range c.containers {
 		list = append(list, container)
 	}
 	return list
 }
 
-// Server implements the proto.DashboardServiceServer interface.
+// Server implements the proto.ManagerServiceServer interface.
 type Server struct {
-	proto.UnimplementedDashboardServiceServer
+	proto.UnimplementedManagerServiceServer
 	cache *Cache
 }
 
@@ -58,9 +58,12 @@ func NewServer(cache *Cache) *Server {
 	}
 }
 
-// ListContainers returns the list of all containers stored in the cache.
-func (s *Server) ListContainers(ctx context.Context, req *proto.ListContainersRequest) (*proto.ListContainersResponse, error) {
-	return &proto.ListContainersResponse{
-		Containers: s.cache.List(),
+// List returns the list of all containers stored in the cache.
+func (s *Server) List(ctx context.Context, req *proto.ListRequest) (*proto.ListResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &proto.ListResponse{
+		Configs: s.cache.List(),
 	}, nil
 }

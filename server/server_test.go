@@ -12,11 +12,9 @@ import (
 func TestCacheUpdateAndList(t *testing.T) {
 	cache := NewCache()
 
-	container := &proto.Container{
-		Id:            "test-container",
-		RepositoryUrl: "https://github.com/test/repo",
-		BranchOrIssue: "main",
-		Status:        proto.ContainerStatus_RUNNING,
+	container := &proto.DevcontainerConfig{
+		Id:    "test-container",
+		State: proto.State_DCM_READY,
 	}
 
 	cache.Update("test-container", container)
@@ -52,10 +50,9 @@ func TestCacheConcurrency(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < numOperations; j++ {
-				container := &proto.Container{
-					Id:            fmt.Sprintf("container-%d-%d", id, j),
-					RepositoryUrl: "https://github.com/test/repo",
-					Status:        proto.ContainerStatus_STARTING,
+				container := &proto.DevcontainerConfig{
+					Id:    fmt.Sprintf("container-%d-%d", id, j),
+					State: proto.State_DCM_CREATING,
 				}
 				cache.Update(container.Id, container)
 			}
@@ -75,28 +72,26 @@ func TestCacheConcurrency(t *testing.T) {
 	wg.Wait()
 }
 
-func TestListContainersRPC(t *testing.T) {
+func TestListRPC(t *testing.T) {
 	cache := NewCache()
 	server := NewServer(cache)
 
-	container := &proto.Container{
-		Id:            "rpc-container",
-		RepositoryUrl: "https://github.com/test/rpc",
-		Status:        proto.ContainerStatus_FAILED,
-		ErrorMessage:  "failed to start",
+	container := &proto.DevcontainerConfig{
+		Id:    "rpc-container",
+		State: proto.State_DCM_FAILED,
 	}
 	cache.Update("rpc-container", container)
 
-	resp, err := server.ListContainers(context.Background(), &proto.ListContainersRequest{})
+	resp, err := server.List(context.Background(), &proto.ListRequest{})
 	if err != nil {
-		t.Fatalf("unexpected error from ListContainers: %v", err)
+		t.Fatalf("unexpected error from List: %v", err)
 	}
 
-	if len(resp.Containers) != 1 {
-		t.Fatalf("expected 1 container in RPC response, got %d", len(resp.Containers))
+	if len(resp.Configs) != 1 {
+		t.Fatalf("expected 1 container in RPC response, got %d", len(resp.Configs))
 	}
 
-	if resp.Containers[0].Id != "rpc-container" {
-		t.Errorf("expected rpc-container, got %s", resp.Containers[0].Id)
+	if resp.Configs[0].Id != "rpc-container" {
+		t.Errorf("expected rpc-container, got %s", resp.Configs[0].Id)
 	}
 }
