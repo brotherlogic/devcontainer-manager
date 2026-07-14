@@ -27,6 +27,6 @@ func TestManagerProtoTypesExist(t *testing.T) {
 	var config proto.DevcontainerConfig
 	var identifier proto.Identifier
 
-	t.Logf("Manager proto types loaded: %T %T %T %T %T %T %v %T %T", 
+	t.Logf("Manager proto types loaded: %T %T %T %T %T %T %v %T %T",
 		&upReq, &upResp, &downReq, &downResp, &listReq, &listResp, state, &config, &identifier)
 }

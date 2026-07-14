@@ -1,7 +1,7 @@
 package main
+
 // Trigger PR review for assign reviewer
 // Trigger PR review for issue closer
-
 
 import (
 	"context"
@@ -46,8 +46,6 @@ func getGHClient() (*github.Client, error) {
 		return nil, fmt.Errorf("GITHUB_TOKEN is not set")
 	}
 
-
-
 	ts := oauth2.StaticTokenSource(
 		&oauth2.Token{AccessToken: token},
 	)
@@ -82,7 +80,7 @@ func listDevpodWorkspaces() ([]DevpodWorkspace, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	outStr := string(out)
 	// Strip ANSI escape codes
 	re := regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
@@ -188,7 +186,7 @@ var (
 
 // We live dangerously
 const (
-	defaultIssueStartupCommand = `agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of this issue - if the issue matches any of the labels in the issues.md file, follow the referenced workflow immediately. Otherwise, if there's associated information in the issues.md file, follow those instructions and begin work immediately. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`
+	defaultIssueStartupCommand = `agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of this issue - if the label matches any of the workflows in the brotherlogic/seraphine project's .agents/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`
 	defaultBranchRef           = ""
 	DevpodLabelPrefix          = "sh.loft.devpod.workspace.id="
 	VscLabelPrefix             = "dev.containers.id="
@@ -260,9 +258,9 @@ func syncCacheWithRunning(running map[string]bool) {
 				}
 			}
 			globalCache.Update(cid, &proto.DevcontainerConfig{
-				Id:                  cid,
-				Request:             &proto.UpRequest{Repo: repoURL, Branch: branchOrIssue, Identifier: identifier},
-				State:               proto.State_DCM_READY,
+				Id:      cid,
+				Request: &proto.UpRequest{Repo: repoURL, Branch: branchOrIssue, Identifier: identifier},
+				State:   proto.State_DCM_READY,
 			})
 		}
 	}
@@ -429,9 +427,9 @@ func run(ctx context.Context, cfg *config) error {
 			if !isAlreadyRunning {
 				logWithPrefix(repo, "Starting devcontainer")
 				container := &proto.DevcontainerConfig{
-					Id:                  id,
-					Request:             &proto.UpRequest{Repo: fmt.Sprintf("git@github.com:%s", repo), Branch: defaultBranchRef},
-					State:               proto.State_DCM_CREATING,
+					Id:      id,
+					Request: &proto.UpRequest{Repo: fmt.Sprintf("git@github.com:%s", repo), Branch: defaultBranchRef},
+					State:   proto.State_DCM_CREATING,
 				}
 				globalCache.Update(id, container)
 
@@ -600,7 +598,7 @@ func run(ctx context.Context, cfg *config) error {
 									renameDockerContainer(containerID)
 									cmdToInject := cfg.startupCommand
 									if cmdToInject == "" {
-										cmdToInject = fmt.Sprintf(`agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of issue #%d - if the issue matches any of the labels in the issues.md file, follow the referenced workflow immediately. Otherwise, if there's associated information in the issues.md file, follow those instructions and begin work immediately. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`, issueNumber)
+										cmdToInject = fmt.Sprintf(`agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of issue #%d - if the label matches any of the workflows in the brotherlogic/seraphine project's .agents/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`, issueNumber)
 									}
 									wg.Add(1)
 									go func(cid string) {
@@ -779,8 +777,8 @@ func run(ctx context.Context, cfg *config) error {
 					}
 				}
 			}
-			}
 		}
+	}
 
 	// 3. Extra Cleanup Logic for (a) not in template list (accounting for issues), and (b) use HTTP source
 	workspaces, listErr := listDevpodWorkspaces()
@@ -802,26 +800,26 @@ func run(ctx context.Context, cfg *config) error {
 				// Check (a): Not in the container list (accounting for issues)
 				inList := validProjectNames[cName] || validIssueContainers[cName]
 
-					if !inList || isHTTPSource {
-						cRepo := getRepoForID(cName, projectRepoMap)
-						logWithPrefix(cRepo, "Cleaning up container %s (inList: %v, isHTTPSource: %v)", cName, inList, isHTTPSource)
-						errStop := stopContainer(cRepo, cName)
-						if errStop != nil {
-							logWithPrefix(cRepo, "Warning: failed to stop container %s during extra cleanup: %v", cName, errStop)
-						}
-						errDel := deleteContainer(cRepo, cName)
-						if errDel != nil {
-							logWithPrefix(cRepo, "Warning: failed to delete container %s during extra cleanup: %v", cName, errDel)
-						} else {
-							if _, exists := getTrackedSHA(cName, trackedSHAs); exists {
-								deleteTrackedSHA(cName, trackedSHAs)
-								trackedSHAsChanged = true
-							}
+				if !inList || isHTTPSource {
+					cRepo := getRepoForID(cName, projectRepoMap)
+					logWithPrefix(cRepo, "Cleaning up container %s (inList: %v, isHTTPSource: %v)", cName, inList, isHTTPSource)
+					errStop := stopContainer(cRepo, cName)
+					if errStop != nil {
+						logWithPrefix(cRepo, "Warning: failed to stop container %s during extra cleanup: %v", cName, errStop)
+					}
+					errDel := deleteContainer(cRepo, cName)
+					if errDel != nil {
+						logWithPrefix(cRepo, "Warning: failed to delete container %s during extra cleanup: %v", cName, errDel)
+					} else {
+						if _, exists := getTrackedSHA(cName, trackedSHAs); exists {
+							deleteTrackedSHA(cName, trackedSHAs)
+							trackedSHAsChanged = true
 						}
 					}
 				}
 			}
 		}
+	}
 
 	if trackedSHAsChanged {
 		if errSave := saveTrackedSHAs(trackedSHAs); errSave != nil {
@@ -832,7 +830,6 @@ func run(ctx context.Context, cfg *config) error {
 	wg.Wait()
 	return nil
 }
-
 
 func stopContainer(repo, id string) error {
 	stopOut, err := runCommandWithLog(repo, devpodExe, "stop", id)
@@ -1300,9 +1297,9 @@ func recreateContainer(ctx context.Context, repo string, id string, startupCmd s
 	}
 
 	container := &proto.DevcontainerConfig{
-		Id:                  id,
-		Request:             &proto.UpRequest{Repo: fmt.Sprintf("git@github.com:%s", repo), Branch: defaultBranchRef},
-		State:               proto.State_DCM_CREATING,
+		Id:      id,
+		Request: &proto.UpRequest{Repo: fmt.Sprintf("git@github.com:%s", repo), Branch: defaultBranchRef},
+		State:   proto.State_DCM_CREATING,
 	}
 	globalCache.Update(id, container)
 
@@ -1352,9 +1349,9 @@ func recreateIssueContainer(ctx context.Context, owner, repoName, branchName, co
 		}
 	}
 	container := &proto.DevcontainerConfig{
-		Id:                  containerID,
-		Request:             &proto.UpRequest{Repo: repoURL, Branch: branchName, Identifier: identifier},
-		State:               proto.State_DCM_CREATING,
+		Id:      containerID,
+		Request: &proto.UpRequest{Repo: repoURL, Branch: branchName, Identifier: identifier},
+		State:   proto.State_DCM_CREATING,
 	}
 	globalCache.Update(containerID, container)
 
