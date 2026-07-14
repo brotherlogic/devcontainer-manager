@@ -186,7 +186,7 @@ var (
 
 // We live dangerously
 const (
-	defaultIssueStartupCommand = `agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of this issue - if the label matches any of the workflows in the brotherlogic/seraphine project's .agents/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`
+	defaultIssueStartupCommand = `agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of this issue - if the label matches any of the workflows in the brotherlogic/seraphine project's .agent/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`
 	defaultBranchRef           = ""
 	DevpodLabelPrefix          = "sh.loft.devpod.workspace.id="
 	VscLabelPrefix             = "dev.containers.id="
@@ -598,7 +598,7 @@ func run(ctx context.Context, cfg *config) error {
 									renameDockerContainer(containerID)
 									cmdToInject := cfg.startupCommand
 									if cmdToInject == "" {
-										cmdToInject = fmt.Sprintf(`agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of issue #%d - if the label matches any of the workflows in the brotherlogic/seraphine project's .agents/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`, issueNumber)
+										cmdToInject = fmt.Sprintf(`agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of issue #%d - if the label matches any of the workflows in the brotherlogic/seraphine project's .agent/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`, issueNumber)
 									}
 									wg.Add(1)
 									go func(cid string) {
