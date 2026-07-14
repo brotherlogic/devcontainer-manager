@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/go-github/v50/github"
 	"github.com/brotherlogic/devcontainer-manager/proto"
 	srvPkg "github.com/brotherlogic/devcontainer-manager/server"
+	"github.com/google/go-github/v50/github"
 )
 
 func TestParseFlags_Defaults(t *testing.T) {
@@ -219,8 +219,6 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 		}
 		return []byte("success"), nil
 	}
-
-
 
 	// Setup GitHub API mock responses
 	// 1. Fetching open issues
@@ -442,8 +440,6 @@ func TestRun_SkipLaunchIfAlreadyActive(t *testing.T) {
 	gitHubClientProvider = func() (*github.Client, error) {
 		return client, nil
 	}
-
-
 
 	// Mock commandRunner
 	originalCommandRunner := commandRunner
@@ -946,7 +942,6 @@ func TestRun_ScanAndLaunchIssueContainer_Failure(t *testing.T) {
 
 	// Mock agy command slug derivation
 
-
 	// Setup GitHub API mock responses
 	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1107,7 +1102,6 @@ func TestRun_RecreateIssueContainerOnHashChange(t *testing.T) {
 	}()
 
 	// Mock agy command slug derivation
-
 
 	// Mock commandRunner
 	originalCommandRunner := commandRunner
@@ -1730,8 +1724,6 @@ func TestRun_ScanAndLaunchIssueContainer_LatencyCommentExists(t *testing.T) {
 		return []byte("success"), nil
 	}
 
-
-
 	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -1793,7 +1785,7 @@ func TestRun_ScanAndLaunchIssueContainer_LatencyCommentExists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	
+
 	// Wait a moment for background goroutine to complete
 	time.Sleep(100 * time.Millisecond)
 
@@ -1851,8 +1843,6 @@ func TestRun_ScanAndLaunchIssueContainer_LatencyCommentError(t *testing.T) {
 		}
 		return []byte("success"), nil
 	}
-
-
 
 	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1979,4 +1969,3 @@ func TestListDevpodWorkspaces_SingleLineJSONWithWarnings(t *testing.T) {
 		t.Errorf("expected ID devcontainer-manager, got %s", workspaces[0].ID)
 	}
 }
-
