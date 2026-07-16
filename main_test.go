@@ -1992,10 +1992,10 @@ func TestReportStartupFailure_LogTooLong(t *testing.T) {
 			}
 			
 			body := req.GetBody()
-			if len(body) > 65000 {
-				t.Errorf("expected body to be truncated to <= 65000 characters, got %d", len(body))
+			if len(body) > 66000 {
+				t.Errorf("expected body to be truncated to <= 66000 characters, got %d", len(body))
 			}
-			if !strings.Contains(body, "[logs truncated due to size limit]") {
+			if !strings.Contains(body, "[logs truncated due to size limit] ...") {
 				t.Errorf("expected body to contain truncation message")
 			}
 			

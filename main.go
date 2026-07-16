@@ -1660,6 +1660,15 @@ func reportStartupFailure(ctx context.Context, client *github.Client, owner, rep
 		}
 	}
 
+	const (
+		GitHubIssueBodyLimit = 65000
+		TruncMsg             = "[logs truncated due to size limit] ...\n"
+	)
+
+	if len(outputLog) > GitHubIssueBodyLimit {
+		outputLog = TruncMsg + outputLog[len(outputLog)-(GitHubIssueBodyLimit-len(TruncMsg)):]
+	}
+
 	var bodyBuilder strings.Builder
 	bodyBuilder.WriteString("### Devcontainer Startup Failure Report\n\n")
 	bodyBuilder.WriteString(fmt.Sprintf("* **Branch:** `%s`\n", branch))
@@ -1676,10 +1685,6 @@ func reportStartupFailure(ctx context.Context, client *github.Client, owner, rep
 	bodyBuilder.WriteString("```\n")
 
 	bodyStr := bodyBuilder.String()
-	if len(bodyStr) > 65000 {
-		truncMsg := "\n... [logs truncated due to size limit]\n```\n"
-		bodyStr = bodyStr[:65000-len(truncMsg)] + truncMsg
-	}
 
 	req := &github.IssueRequest{
 		Title:  github.String("Issue Container Startup Failed"),
