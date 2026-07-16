@@ -130,3 +130,5 @@ The repository includes pre-configured automation workflows under `.github/workf
 
 ## 🔗 Project Workflows & Contributions
 For details on the issue lifecycle, label transitions, and the AI-driven development workflows utilized in this project, refer to the [Issues Workflow Guide (issues.md)](file:///workspaces/devcontainer-manager/issues.md).
+
+- Log truncation for long startup failure logs

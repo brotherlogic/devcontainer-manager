@@ -1675,9 +1675,15 @@ func reportStartupFailure(ctx context.Context, client *github.Client, owner, rep
 	}
 	bodyBuilder.WriteString("```\n")
 
+	bodyStr := bodyBuilder.String()
+	if len(bodyStr) > 65000 {
+		truncMsg := "\n... [logs truncated due to size limit]\n```\n"
+		bodyStr = bodyStr[:65000-len(truncMsg)] + truncMsg
+	}
+
 	req := &github.IssueRequest{
 		Title:  github.String("Issue Container Startup Failed"),
-		Body:   github.String(bodyBuilder.String()),
+		Body:   github.String(bodyStr),
 		Labels: &[]string{"seraphine-bug"},
 	}
 
