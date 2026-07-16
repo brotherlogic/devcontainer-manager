@@ -1969,3 +1969,49 @@ func TestListDevpodWorkspaces_SingleLineJSONWithWarnings(t *testing.T) {
 		t.Errorf("expected ID devcontainer-manager, got %s", workspaces[0].ID)
 	}
 }
+
+func TestReportStartupFailure_LogTooLong(t *testing.T) {
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	var createCalled bool
+
+	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost {
+			createCalled = true
+			var req github.IssueRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("failed to decode request body: %v", err)
+			}
+			
+			body := req.GetBody()
+			if len(body) > 66000 {
+				t.Errorf("expected body to be truncated to <= 66000 characters, got %d", len(body))
+			}
+			if !strings.Contains(body, "[logs truncated due to size limit] ...") {
+				t.Errorf("expected body to contain truncation message")
+			}
+			
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"number": 100}`)
+			return
+		}
+		
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `[]`)
+	})
+
+	longLog := strings.Repeat("a", 70000)
+	reportStartupFailure(context.Background(), client, "test-owner", "test-repo", "feature/my-branch_42", 42, fmt.Errorf("startup err"), longLog)
+
+	if !createCalled {
+		t.Error("expected create issue to be called")
+	}
+}
