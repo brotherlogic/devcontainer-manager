@@ -186,7 +186,7 @@ var (
 
 // We live dangerously
 const (
-	defaultIssueStartupCommand = `agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of this issue - if the label matches any of the workflows in the brotherlogic/seraphine project's .agents/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`
+	defaultIssueStartupCommand = `agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of this issue - if the label matches any of the workflows in the brotherlogic/seraphine project's .agent/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`
 	defaultBranchRef           = ""
 	DevpodLabelPrefix          = "sh.loft.devpod.workspace.id="
 	VscLabelPrefix             = "dev.containers.id="
@@ -598,7 +598,7 @@ func run(ctx context.Context, cfg *config) error {
 									renameDockerContainer(containerID)
 									cmdToInject := cfg.startupCommand
 									if cmdToInject == "" {
-										cmdToInject = fmt.Sprintf(`agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of issue #%d - if the label matches any of the workflows in the brotherlogic/seraphine project's .agents/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`, issueNumber)
+										cmdToInject = fmt.Sprintf(`agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of issue #%d - if the label matches any of the workflows in the brotherlogic/seraphine project's .agent/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`, issueNumber)
 									}
 									wg.Add(1)
 									go func(cid string) {
@@ -1660,6 +1660,15 @@ func reportStartupFailure(ctx context.Context, client *github.Client, owner, rep
 		}
 	}
 
+	const (
+		GitHubIssueBodyLimit = 65000
+		TruncMsg             = "[logs truncated due to size limit] ...\n"
+	)
+
+	if len(outputLog) > GitHubIssueBodyLimit {
+		outputLog = TruncMsg + outputLog[len(outputLog)-(GitHubIssueBodyLimit-len(TruncMsg)):]
+	}
+
 	var bodyBuilder strings.Builder
 	bodyBuilder.WriteString("### Devcontainer Startup Failure Report\n\n")
 	bodyBuilder.WriteString(fmt.Sprintf("* **Branch:** `%s`\n", branch))
@@ -1675,9 +1684,11 @@ func reportStartupFailure(ctx context.Context, client *github.Client, owner, rep
 	}
 	bodyBuilder.WriteString("```\n")
 
+	bodyStr := bodyBuilder.String()
+
 	req := &github.IssueRequest{
 		Title:  github.String("Issue Container Startup Failed"),
-		Body:   github.String(bodyBuilder.String()),
+		Body:   github.String(bodyStr),
 		Labels: &[]string{"seraphine-bug"},
 	}
 
