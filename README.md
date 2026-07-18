@@ -7,7 +7,7 @@
 ## 🚀 Key Capabilities
 
 *   **Continuous Synchronization:** Detects configuration changes in remote templates and aligns local devcontainers by rebuilding or cleaning them up.
-*   **Startup Failure Recovery:** Automatically deletes devcontainers if they fail to start properly, allowing them to be cleanly re-provisioned from head on the next cycle.
+*   **Startup Failure Recovery:** Automatically deletes devcontainers and their remote GitHub issue branches if they fail to start properly during initial provisioning, allowing them to be cleanly re-created and re-provisioned from main on the next cycle.
 *   **Fresh Issue Containers:** Forces devpod to recreate issue containers to always pull the freshest container config from head, bypassing the local cache.
 *   **GitHub Issue Devcontainers:** Automatically provisions dedicated devcontainers for open issues containing `seraphine` labels, handling state labels (`container-creating`, `container-ready`, `container-failed`) dynamically.
 *   **Container Prioritization:** Dynamically orders container startup operations, prioritizing repositories that have been most recently updated (pushed) on GitHub.

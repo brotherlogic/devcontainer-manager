@@ -574,6 +574,15 @@ func run(ctx context.Context, cfg *config) error {
 									if delErr := deleteContainer(repo, containerID); delErr != nil {
 										logWithPrefix(repo, "Warning: failed to delete failed devcontainer %s: %v", containerID, delErr)
 									}
+									// Delete branch so it can be re-created from main next time
+									if client != nil {
+										refName := "heads/" + branchName
+										if _, delBranchErr := client.Git.DeleteRef(ctx, owner, repoName, refName); delBranchErr != nil {
+											logWithPrefix(repo, "Warning: failed to delete branch %s after container build failure: %v", branchName, delBranchErr)
+										} else {
+											logWithPrefix(repo, "Successfully deleted branch %s after container build failure", branchName)
+										}
+									}
 									// Ensure the failed status remains in the cache for dashboard visibility despite the container deletion
 									globalCache.Update(containerID, container)
 									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
