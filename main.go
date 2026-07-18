@@ -574,7 +574,9 @@ func run(ctx context.Context, cfg *config) error {
 									if delErr := deleteContainer(repo, containerID); delErr != nil {
 										logWithPrefix(repo, "Warning: failed to delete failed devcontainer %s: %v", containerID, delErr)
 									}
-									// Delete branch so it can be re-created from main next time
+									// Delete branch so it can be re-created from main next time.
+									// Note: If this deletion fails, ensureIssueBranchExists will fallback to reusing the existing branch.
+									// This prevents transient GitHub API failures from completely halting progress, though the broken branch may persist.
 									if client != nil {
 										refName := "heads/" + branchName
 										if _, delBranchErr := client.Git.DeleteRef(ctx, owner, repoName, refName); delBranchErr != nil {
