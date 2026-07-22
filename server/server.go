@@ -91,10 +91,7 @@ func (s *Server) Up(ctx context.Context, req *proto.UpRequest) (*proto.UpRespons
 
 		if !exists {
 			defaultBranch, err := s.gitClient.GetDefaultBranch(ctx, req.GetRepo())
-			if err != nil {
-				defaultBranch = "main"
-			}
-			if defaultBranch == "" {
+			if err != nil || defaultBranch == "" {
 				defaultBranch = "main"
 			}
 
