@@ -59,7 +59,7 @@ func (c *Cache) List() []*proto.DevcontainerConfig {
 	return list
 }
 
-// Get retrieves a container status from the cache by its ID.
+// Get retrieves a DevcontainerConfig from the cache by its ID.
 func (c *Cache) Get(id string) (*proto.DevcontainerConfig, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
