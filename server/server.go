@@ -59,19 +59,28 @@ func (c *Cache) List() []*proto.DevcontainerConfig {
 	return list
 }
 
+// GitClient abstracts git / github operations required for branch management.
+type GitClient interface {
+	BranchExists(ctx context.Context, repo, branch string) (bool, error)
+	CreateBranch(ctx context.Context, repo, newBranch, baseBranch string) error
+	GetDefaultBranch(ctx context.Context, repo string) (string, error)
+}
+
 // Server implements the proto.ManagerServiceServer interface.
 type Server struct {
 	proto.UnimplementedManagerServiceServer
 	cache           *Cache
+	gitClient       GitClient
 	modelsMu        sync.RWMutex
 	supportedModels map[string]bool
 	commandRunner   CommandRunner
 }
 
 // NewServer creates and initializes a new gRPC server implementation.
-func NewServer(cache *Cache) *Server {
+func NewServer(cache *Cache, gitClient GitClient) *Server {
 	return &Server{
 		cache:           cache,
+		gitClient:       gitClient,
 		supportedModels: make(map[string]bool),
 		commandRunner:   defaultCommandRunner,
 	}
@@ -172,7 +181,7 @@ func (s *Server) IsModelSupported(model string) bool {
 	return s.supportedModels[model]
 }
 
-// Up handles creating/starting a devcontainer workspace request with model validation.
+// Up handles creating/starting a devcontainer workspace request with model validation and branch auto-creation.
 func (s *Server) Up(ctx context.Context, req *proto.UpRequest) (*proto.UpResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -180,6 +189,25 @@ func (s *Server) Up(ctx context.Context, req *proto.UpRequest) (*proto.UpRespons
 	if req.GetModel() != "" && !s.IsModelSupported(req.GetModel()) {
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported model: %s", req.GetModel())
 	}
+
+	if s.gitClient != nil && req.GetBranch() != "" {
+		exists, err := s.gitClient.BranchExists(ctx, req.GetRepo(), req.GetBranch())
+		if err != nil {
+			return nil, err
+		}
+
+		if !exists {
+			defaultBranch, err := s.gitClient.GetDefaultBranch(ctx, req.GetRepo())
+			if err != nil || defaultBranch == "" {
+				defaultBranch = "main"
+			}
+
+			if err := s.gitClient.CreateBranch(ctx, req.GetRepo(), req.GetBranch(), defaultBranch); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	config := &proto.DevcontainerConfig{
 		Id:      fmt.Sprintf("%s-%s", req.GetRepo(), req.GetBranch()),
 		Request: req,

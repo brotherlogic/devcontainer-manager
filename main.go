@@ -214,7 +214,7 @@ func startGRPCServer(port int, cache *server.Cache) (*grpc.Server, error) {
 		return nil, fmt.Errorf("failed to listen: %w", err)
 	}
 	s := grpc.NewServer()
-	proto.RegisterManagerServiceServer(s, server.NewServer(cache))
+	proto.RegisterManagerServiceServer(s, server.NewServer(cache, nil))
 	go func() {
 		if err := s.Serve(lis); err != nil {
 			log.Printf("gRPC server stopped: %v", err)

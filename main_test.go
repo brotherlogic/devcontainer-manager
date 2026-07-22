@@ -378,7 +378,7 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 	}
 
 	// Verify ManagerService.List and proto.DevcontainerConfig
-	mgrServer := srvPkg.NewServer(globalCache)
+	mgrServer := srvPkg.NewServer(globalCache, nil)
 	listResp, listErr := mgrServer.List(context.Background(), &proto.ListRequest{})
 	if listErr != nil {
 		t.Fatalf("unexpected error calling List: %v", listErr)
