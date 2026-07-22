@@ -74,7 +74,7 @@ func TestCacheConcurrency(t *testing.T) {
 
 func TestListRPC(t *testing.T) {
 	cache := NewCache()
-	server := NewServer(cache)
+	server := NewServer(cache, nil)
 
 	container := &proto.DevcontainerConfig{
 		Id:    "rpc-container",
@@ -95,3 +95,83 @@ func TestListRPC(t *testing.T) {
 		t.Errorf("expected rpc-container, got %s", resp.Configs[0].Id)
 	}
 }
+
+type mockGitClient struct {
+	existingBranches map[string]bool
+	createdBranches  map[string]string // newBranch -> baseBranch
+	defaultBranch    string
+}
+
+func (m *mockGitClient) BranchExists(ctx context.Context, repo, branch string) (bool, error) {
+	return m.existingBranches[branch], nil
+}
+
+func (m *mockGitClient) CreateBranch(ctx context.Context, repo, newBranch, baseBranch string) error {
+	if m.createdBranches == nil {
+		m.createdBranches = make(map[string]string)
+	}
+	m.createdBranches[newBranch] = baseBranch
+	m.existingBranches[newBranch] = true
+	return nil
+}
+
+func (m *mockGitClient) GetDefaultBranch(ctx context.Context, repo string) (string, error) {
+	if m.defaultBranch != "" {
+		return m.defaultBranch, nil
+	}
+	return "main", nil
+}
+
+func TestUpRPCExistingBranch(t *testing.T) {
+	cache := NewCache()
+	mockGit := &mockGitClient{
+		existingBranches: map[string]bool{"feature/test": true},
+	}
+	server := NewServer(cache, mockGit)
+
+	req := &proto.UpRequest{
+		Repo:   "brotherlogic/test-repo",
+		Branch: "feature/test",
+	}
+
+	resp, err := server.Up(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Up failed: %v", err)
+	}
+
+	if resp.Config.Id != "brotherlogic/test-repo:feature/test" {
+		t.Errorf("unexpected config ID: got %s", resp.Config.Id)
+	}
+
+	if len(mockGit.createdBranches) > 0 {
+		t.Errorf("expected no branch creation, but created: %v", mockGit.createdBranches)
+	}
+}
+
+func TestUpRPCAutoCreateBranch(t *testing.T) {
+	cache := NewCache()
+	mockGit := &mockGitClient{
+		existingBranches: map[string]bool{},
+		defaultBranch:    "main",
+	}
+	server := NewServer(cache, mockGit)
+
+	req := &proto.UpRequest{
+		Repo:   "brotherlogic/test-repo",
+		Branch: "feature/new-branch",
+	}
+
+	resp, err := server.Up(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Up failed: %v", err)
+	}
+
+	if resp.Config.Id != "brotherlogic/test-repo:feature/new-branch" {
+		t.Errorf("unexpected config ID: got %s", resp.Config.Id)
+	}
+
+	if base, created := mockGit.createdBranches["feature/new-branch"]; !created || base != "main" {
+		t.Errorf("expected branch feature/new-branch created off main, got base %s (created=%v)", base, created)
+	}
+}
+

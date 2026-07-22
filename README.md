@@ -112,7 +112,7 @@ DCM keeps track of the active configurations it processes to prevent redundant r
 ## 📊 gRPC Manager Service (Previously Dashboard)
 
 DCM hosts a gRPC service implementing `ManagerService` defined in `proto/manager.proto` (which replaces and deprecates `dashboard.proto`). This service provides:
-*   **Up RPC:** Programmatically trigger the creation of a devcontainer for a specific repository, branch, or issue.
+*   **Up RPC:** Programmatically trigger the creation of a devcontainer for a specific repository, branch, or issue. Automatically checks if the specified branch exists on the target repository and creates it off `main` (or default branch) if missing.
 *   **Down RPC:** Cancel and cleanup an existing devcontainer by ID.
 *   **List RPC:** Retrieves a list of active devcontainers with their metadata, including ID, Request details, current State (`DCM_RECEIVED`, `DCM_READY`, `DCM_FAILED`, etc.), and retry status.
 *   **Internal Cache:** The internal server cache now maps containers directly to `DevcontainerConfig`, completely deprecating the old `Container` type and `ListContainers` RPC.
