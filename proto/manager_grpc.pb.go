@@ -19,9 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ManagerService_Up_FullMethodName   = "/manager.ManagerService/Up"
-	ManagerService_Down_FullMethodName = "/manager.ManagerService/Down"
-	ManagerService_List_FullMethodName = "/manager.ManagerService/List"
+	ManagerService_Up_FullMethodName         = "/manager.ManagerService/Up"
+	ManagerService_Down_FullMethodName       = "/manager.ManagerService/Down"
+	ManagerService_List_FullMethodName       = "/manager.ManagerService/List"
+	ManagerService_PushPrompt_FullMethodName = "/manager.ManagerService/PushPrompt"
 )
 
 // ManagerServiceClient is the client API for ManagerService service.
@@ -31,6 +32,7 @@ type ManagerServiceClient interface {
 	Up(ctx context.Context, in *UpRequest, opts ...grpc.CallOption) (*UpResponse, error)
 	Down(ctx context.Context, in *DownRequest, opts ...grpc.CallOption) (*DownResponse, error)
 	List(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
+	PushPrompt(ctx context.Context, in *PushPromptRequest, opts ...grpc.CallOption) (*PushPromptResponse, error)
 }
 
 type managerServiceClient struct {
@@ -71,6 +73,16 @@ func (c *managerServiceClient) List(ctx context.Context, in *ListRequest, opts .
 	return out, nil
 }
 
+func (c *managerServiceClient) PushPrompt(ctx context.Context, in *PushPromptRequest, opts ...grpc.CallOption) (*PushPromptResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PushPromptResponse)
+	err := c.cc.Invoke(ctx, ManagerService_PushPrompt_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ManagerServiceServer is the server API for ManagerService service.
 // All implementations must embed UnimplementedManagerServiceServer
 // for forward compatibility.
@@ -78,6 +90,7 @@ type ManagerServiceServer interface {
 	Up(context.Context, *UpRequest) (*UpResponse, error)
 	Down(context.Context, *DownRequest) (*DownResponse, error)
 	List(context.Context, *ListRequest) (*ListResponse, error)
+	PushPrompt(context.Context, *PushPromptRequest) (*PushPromptResponse, error)
 	mustEmbedUnimplementedManagerServiceServer()
 }
 
@@ -96,6 +109,9 @@ func (UnimplementedManagerServiceServer) Down(context.Context, *DownRequest) (*D
 }
 func (UnimplementedManagerServiceServer) List(context.Context, *ListRequest) (*ListResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method List not implemented")
+}
+func (UnimplementedManagerServiceServer) PushPrompt(context.Context, *PushPromptRequest) (*PushPromptResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PushPrompt not implemented")
 }
 func (UnimplementedManagerServiceServer) mustEmbedUnimplementedManagerServiceServer() {}
 func (UnimplementedManagerServiceServer) testEmbeddedByValue()                        {}
@@ -172,6 +188,24 @@ func _ManagerService_List_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ManagerService_PushPrompt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PushPromptRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ManagerServiceServer).PushPrompt(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ManagerService_PushPrompt_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ManagerServiceServer).PushPrompt(ctx, req.(*PushPromptRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ManagerService_ServiceDesc is the grpc.ServiceDesc for ManagerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -190,6 +224,10 @@ var ManagerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "List",
 			Handler:    _ManagerService_List_Handler,
+		},
+		{
+			MethodName: "PushPrompt",
+			Handler:    _ManagerService_PushPrompt_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

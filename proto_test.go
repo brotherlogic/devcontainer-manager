@@ -30,3 +30,13 @@ func TestManagerProtoTypesExist(t *testing.T) {
 	t.Logf("Manager proto types loaded: %T %T %T %T %T %T %v %T %T",
 		&upReq, &upResp, &downReq, &downResp, &listReq, &listResp, state, &config, &identifier)
 }
+
+func TestPushPromptProtoTypesExist(t *testing.T) {
+	var upReq proto.UpRequest
+	upReq.Model = "gemini-2.5-pro"
+
+	var pushReq proto.PushPromptRequest
+	var pushResp proto.PushPromptResponse
+
+	t.Logf("PushPrompt proto types: upReq.Model=%s, pushReq=%T, pushResp=%T", upReq.Model, &pushReq, &pushResp)
+}

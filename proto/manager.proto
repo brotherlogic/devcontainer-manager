@@ -8,6 +8,7 @@ service ManagerService {
   rpc Up(UpRequest) returns (UpResponse);
   rpc Down(DownRequest) returns (DownResponse);
   rpc List(ListRequest) returns (ListResponse);
+  rpc PushPrompt(PushPromptRequest) returns (PushPromptResponse);
 }
 
 enum State {
@@ -33,6 +34,7 @@ message UpRequest {
   Identifier identifier = 2; // e.g., Issue or PR number
   string branch = 3;
   string prompt = 4;
+  string model = 5;
 }
 
 message UpResponse {
@@ -50,6 +52,13 @@ message ListRequest {}
 message ListResponse {
   repeated DevcontainerConfig configs = 1;
 }
+
+message PushPromptRequest {
+  string id = 1;
+  string prompt = 2;
+}
+
+message PushPromptResponse {}
 
 message DevcontainerConfig {
   string id = 1; // Unique identifier for this devcontainer request
