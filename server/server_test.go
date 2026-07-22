@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/brotherlogic/devcontainer-manager/proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestCacheUpdateAndList(t *testing.T) {
@@ -95,3 +97,67 @@ func TestListRPC(t *testing.T) {
 		t.Errorf("expected rpc-container, got %s", resp.Configs[0].Id)
 	}
 }
+
+func TestUpRPC_ModelValidation(t *testing.T) {
+	cache := NewCache()
+	srv := NewServer(cache)
+	srv.SetSupportedModels([]string{"gemini-3.6-flash-low", "claude-sonnet-4-6"})
+
+	// Test valid model
+	reqValid := &proto.UpRequest{
+		Repo:  "test/repo",
+		Model: "gemini-3.6-flash-low",
+	}
+	resp, err := srv.Up(context.Background(), reqValid)
+	if err != nil {
+		t.Fatalf("unexpected error for valid model: %v", err)
+	}
+	if resp == nil || resp.Config == nil {
+		t.Fatalf("expected non-nil config in response")
+	}
+
+	// Test invalid model
+	reqInvalid := &proto.UpRequest{
+		Repo:  "test/repo",
+		Model: "invalid-model-name",
+	}
+	_, err = srv.Up(context.Background(), reqInvalid)
+	if err == nil {
+		t.Fatalf("expected error for invalid model, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument status error, got: %v", err)
+	}
+}
+
+func TestFetchAndRefreshSupportedModels(t *testing.T) {
+	cache := NewCache()
+	srv := NewServer(cache)
+	srv.SetCommandRunner(func(name string, args ...string) ([]byte, error) {
+		output := "gemini-3.6-flash-low     Gemini 3.6 Flash (Low)\nclaude-sonnet-4-6         Claude Sonnet 4.6 (Thinking)\n"
+		return []byte(output), nil
+	})
+
+	err := srv.RefreshSupportedModels()
+	if err != nil {
+		t.Fatalf("unexpected error refreshing models: %v", err)
+	}
+
+	models := srv.GetSupportedModels()
+	if len(models) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(models))
+	}
+
+	if !srv.IsModelSupported("gemini-3.6-flash-low") {
+		t.Errorf("expected gemini-3.6-flash-low to be supported")
+	}
+	if !srv.IsModelSupported("claude-sonnet-4-6") {
+		t.Errorf("expected claude-sonnet-4-6 to be supported")
+	}
+	if srv.IsModelSupported("unknown-model") {
+		t.Errorf("expected unknown-model to NOT be supported")
+	}
+}
+
+
