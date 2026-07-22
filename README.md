@@ -113,9 +113,9 @@ DCM keeps track of the active configurations it processes to prevent redundant r
 
 DCM hosts a gRPC service implementing `ManagerService` defined in `proto/manager.proto` (which replaces and deprecates `dashboard.proto`). This service provides:
 *   **Up RPC:** Programmatically trigger the creation of a devcontainer for a specific repository, branch, or issue. Automatically checks if the specified branch exists on the target repository and creates it off `main` (or default branch) if missing.
-*   **Down RPC:** Cancel and cleanup an existing devcontainer by ID.
+*   **Down RPC:** Terminates and cleans up an existing devcontainer instance/config from the cache by ID.
 *   **List RPC:** Retrieves a list of active devcontainers with their metadata, including ID, Request details, current State (`DCM_RECEIVED`, `DCM_READY`, `DCM_FAILED`, etc.), and retry status.
-*   **PushPrompt RPC:** Dispatches prompt payloads to target containers in the in-memory cache. Validates container existence (`NotFound` error if missing) and verifies container state is `DCM_READY` (`FailedPrecondition` error if not).
+*   **PushPrompt RPC:** Dispatches prompt payloads to target containers in the in-memory cache. Validates container existence (`NotFound` error if missing) and verifies container state is `DCM_READY` (`FailedPrecondition` error if not). Retains containers in `DCM_READY` state after prompt execution to allow subsequent prompt calls.
 *   **Internal Cache:** The internal server cache now maps containers directly to `DevcontainerConfig`, completely deprecating the old `Container` type and `ListContainers` RPC.
 *   **Thread-Safe State persistence:** The state is updated in real-time as devcontainers transition through different lifecycle stages, and integrates with persistent storage (`pstore`).
 *   **Identifier Tracking:** Devcontainers associated with specific issues correctly populate their `Identifier` context in the cache, and existing test suites enforce correct schema implementations via the gRPC client layer.

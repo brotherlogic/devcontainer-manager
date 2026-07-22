@@ -305,5 +305,58 @@ func TestPushPrompt_Success(t *testing.T) {
 	if resp == nil {
 		t.Fatalf("expected non-nil response")
 	}
+
+	// Verify container remains in DCM_READY state after prompt execution
+	updated, ok := cache.Get("ready-container")
+	if !ok || updated.GetState() != proto.State_DCM_READY {
+		t.Errorf("expected container state to remain DCM_READY after PushPrompt, got %v", updated.GetState())
+	}
+}
+
+func TestDown_NotFound(t *testing.T) {
+	cache := NewCache()
+	srv := NewServer(cache, nil)
+
+	req := &proto.DownRequest{
+		Id: "non-existent-container",
+	}
+
+	_, err := srv.Down(context.Background(), req)
+	if err == nil {
+		t.Fatalf("expected error for non-existent container, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.NotFound {
+		t.Errorf("expected NotFound status error, got: %v", err)
+	}
+}
+
+func TestDown_Success(t *testing.T) {
+	cache := NewCache()
+	srv := NewServer(cache, nil)
+
+	container := &proto.DevcontainerConfig{
+		Id:    "active-container",
+		State: proto.State_DCM_READY,
+	}
+	cache.Update("active-container", container)
+
+	req := &proto.DownRequest{
+		Id: "active-container",
+	}
+
+	resp, err := srv.Down(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error on Down: %v", err)
+	}
+	if resp == nil {
+		t.Fatalf("expected non-nil response on Down")
+	}
+
+	// Verify container is cleaned up / deleted from cache
+	_, ok := cache.Get("active-container")
+	if ok {
+		t.Errorf("expected container active-container to be removed from cache on Down RPC call")
+	}
 }
 
