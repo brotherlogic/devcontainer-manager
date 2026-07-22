@@ -256,7 +256,7 @@ func (s *Server) PushPrompt(ctx context.Context, req *proto.PushPromptRequest) (
 	return &proto.PushPromptResponse{}, nil
 }
 
-// Down terminates and cleans up container configuration/instance from cache.
+// Down removes container configuration from the cache.
 func (s *Server) Down(ctx context.Context, req *proto.DownRequest) (*proto.DownResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
