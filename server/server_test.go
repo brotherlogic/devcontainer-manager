@@ -239,3 +239,71 @@ func TestFetchAndRefreshSupportedModels(t *testing.T) {
 	}
 }
 
+func TestPushPrompt_NotFound(t *testing.T) {
+	cache := NewCache()
+	srv := NewServer(cache, nil)
+
+	req := &proto.PushPromptRequest{
+		Id:     "non-existent-container",
+		Prompt: "hello",
+	}
+
+	_, err := srv.PushPrompt(context.Background(), req)
+	if err == nil {
+		t.Fatalf("expected error for non-existent container, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.NotFound {
+		t.Errorf("expected NotFound status error, got: %v", err)
+	}
+}
+
+func TestPushPrompt_NotReadyState(t *testing.T) {
+	cache := NewCache()
+	srv := NewServer(cache, nil)
+
+	container := &proto.DevcontainerConfig{
+		Id:    "building-container",
+		State: proto.State_DCM_CREATING,
+	}
+	cache.Update("building-container", container)
+
+	req := &proto.PushPromptRequest{
+		Id:     "building-container",
+		Prompt: "hello",
+	}
+
+	_, err := srv.PushPrompt(context.Background(), req)
+	if err == nil {
+		t.Fatalf("expected error for container not in DCM_READY state, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.FailedPrecondition {
+		t.Errorf("expected FailedPrecondition status error, got: %v", err)
+	}
+}
+
+func TestPushPrompt_Success(t *testing.T) {
+	cache := NewCache()
+	srv := NewServer(cache, nil)
+
+	container := &proto.DevcontainerConfig{
+		Id:    "ready-container",
+		State: proto.State_DCM_READY,
+	}
+	cache.Update("ready-container", container)
+
+	req := &proto.PushPromptRequest{
+		Id:     "ready-container",
+		Prompt: "hello prompt",
+	}
+
+	resp, err := srv.PushPrompt(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp == nil {
+		t.Fatalf("expected non-nil response")
+	}
+}
+

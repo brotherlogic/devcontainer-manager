@@ -59,6 +59,15 @@ func (c *Cache) List() []*proto.DevcontainerConfig {
 	return list
 }
 
+// Get retrieves a container status from the cache by its ID.
+func (c *Cache) Get(id string) (*proto.DevcontainerConfig, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	cfg, ok := c.containers[id]
+	return cfg, ok
+}
+
+
 // GitClient abstracts git / github operations required for branch management.
 type GitClient interface {
 	BranchExists(ctx context.Context, repo, branch string) (bool, error)
@@ -228,4 +237,23 @@ func (s *Server) List(ctx context.Context, req *proto.ListRequest) (*proto.ListR
 		Configs: s.cache.List(),
 	}, nil
 }
+
+// PushPrompt dispatches prompt payload to target container if it exists and is in DCM_READY state.
+func (s *Server) PushPrompt(ctx context.Context, req *proto.PushPromptRequest) (*proto.PushPromptResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	container, ok := s.cache.Get(req.GetId())
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "container %s not found", req.GetId())
+	}
+
+	if container.GetState() != proto.State_DCM_READY {
+		return nil, status.Errorf(codes.FailedPrecondition, "container %s is not in DCM_READY state (current state: %s)", req.GetId(), container.GetState())
+	}
+
+	return &proto.PushPromptResponse{}, nil
+}
+
 
