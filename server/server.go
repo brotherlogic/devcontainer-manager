@@ -256,4 +256,19 @@ func (s *Server) PushPrompt(ctx context.Context, req *proto.PushPromptRequest) (
 	return &proto.PushPromptResponse{}, nil
 }
 
+// Down terminates and cleans up container configuration/instance from cache.
+func (s *Server) Down(ctx context.Context, req *proto.DownRequest) (*proto.DownResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	_, ok := s.cache.Get(req.GetId())
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "container %s not found", req.GetId())
+	}
+
+	s.cache.Delete(req.GetId())
+	return &proto.DownResponse{}, nil
+}
+
 
