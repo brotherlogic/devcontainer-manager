@@ -91,6 +91,11 @@ type Server struct {
 
 // NewServer creates and initializes a new gRPC server implementation.
 func NewServer(cache *Cache, gitClient GitClient) *Server {
+	if gitClient == nil {
+		log.Printf("WARN: NewServer: gitClient is nil - branch auto-creation in Up will be skipped")
+	} else {
+		log.Printf("NewServer: gitClient is initialized")
+	}
 	return &Server{
 		cache:           cache,
 		gitClient:       gitClient,
@@ -260,12 +265,14 @@ func (s *Server) Up(ctx context.Context, req *proto.UpRequest) (*proto.UpRespons
 	}
 
 	if s.gitClient != nil && req.GetBranch() != "" {
+		log.Printf("Up: checking if branch %q exists in repo %q", req.GetBranch(), req.GetRepo())
 		exists, err := s.gitClient.BranchExists(ctx, req.GetRepo(), req.GetBranch())
 		if err != nil {
 			return nil, err
 		}
 
 		if !exists {
+			log.Printf("Up: branch %q does not exist, attempting to auto-create from default branch", req.GetBranch())
 			defaultBranch, err := s.gitClient.GetDefaultBranch(ctx, req.GetRepo())
 			if err != nil || defaultBranch == "" {
 				defaultBranch = "main"
@@ -275,6 +282,8 @@ func (s *Server) Up(ctx context.Context, req *proto.UpRequest) (*proto.UpRespons
 				return nil, err
 			}
 		}
+	} else {
+		log.Printf("Up: skipping branch auto-creation (gitClient is nil: %v, branch is empty: %v)", s.gitClient == nil, req.GetBranch() == "")
 	}
 
 	var issueNum int32
