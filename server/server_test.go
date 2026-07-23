@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -293,6 +294,12 @@ func TestPushPrompt_Success(t *testing.T) {
 	}
 	cache.Update("ready-container", container)
 
+	var executedCmds [][]string
+	srv.SetCommandRunner(func(name string, args ...string) ([]byte, error) {
+		executedCmds = append(executedCmds, append([]string{name}, args...))
+		return []byte("success"), nil
+	})
+
 	req := &proto.PushPromptRequest{
 		Id:     "ready-container",
 		Prompt: "hello prompt",
@@ -306,10 +313,153 @@ func TestPushPrompt_Success(t *testing.T) {
 		t.Fatalf("expected non-nil response")
 	}
 
+	// Verify command execution
+	if len(executedCmds) != 2 {
+		t.Fatalf("expected 2 commands to be executed, got %d: %v", len(executedCmds), executedCmds)
+	}
+
+	// First command: tmux has-session -t 'ready-container'
+	expectedCmd1 := []string{devpodExe, "ssh", "ready-container", "--command", "tmux has-session -t 'ready-container'"}
+	for i, v := range expectedCmd1 {
+		if executedCmds[0][i] != v {
+			t.Errorf("expected cmd1[%d] to be %q, got %q", i, v, executedCmds[0][i])
+		}
+	}
+
+	// Second command: tmux send-keys -t 'ready-container' 'hello prompt' C-m
+	expectedCmd2 := []string{devpodExe, "ssh", "ready-container", "--command", "tmux send-keys -t 'ready-container' 'hello prompt' C-m"}
+	for i, v := range expectedCmd2 {
+		if executedCmds[1][i] != v {
+			t.Errorf("expected cmd2[%d] to be %q, got %q", i, v, executedCmds[1][i])
+		}
+	}
+
 	// Verify container remains in DCM_READY state after prompt execution
 	updated, ok := cache.Get("ready-container")
 	if !ok || updated.GetState() != proto.State_DCM_READY {
 		t.Errorf("expected container state to remain DCM_READY after PushPrompt, got %v", updated.GetState())
+	}
+}
+
+func TestPushPrompt_FallbackSuccess(t *testing.T) {
+	cache := NewCache()
+	srv := NewServer(cache, nil)
+
+	// Container ID with trailing issue number
+	container := &proto.DevcontainerConfig{
+		Id:    "ready-container-42",
+		State: proto.State_DCM_READY,
+	}
+	cache.Update("ready-container-42", container)
+
+	var executedCmds [][]string
+	srv.SetCommandRunner(func(name string, args ...string) ([]byte, error) {
+		executedCmds = append(executedCmds, append([]string{name}, args...))
+		// Fail the direct has-session check, succeed the rest
+		if len(args) >= 4 && args[0] == "ssh" && args[3] == "tmux has-session -t 'ready-container-42'" {
+			return nil, fmt.Errorf("session not found")
+		}
+		return []byte("success"), nil
+	})
+
+	req := &proto.PushPromptRequest{
+		Id:     "ready-container-42",
+		Prompt: "hello prompt",
+	}
+
+	resp, err := srv.PushPrompt(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp == nil {
+		t.Fatalf("expected non-nil response")
+	}
+
+	// Verify command execution: 1. check main session (fail), 2. check base session (success), 3. send-keys (success)
+	if len(executedCmds) != 3 {
+		t.Fatalf("expected 3 commands to be executed, got %d: %v", len(executedCmds), executedCmds)
+	}
+
+	expectedCmd1 := []string{devpodExe, "ssh", "ready-container-42", "--command", "tmux has-session -t 'ready-container-42'"}
+	for i, v := range expectedCmd1 {
+		if executedCmds[0][i] != v {
+			t.Errorf("expected cmd1[%d] to be %q, got %q", i, v, executedCmds[0][i])
+		}
+	}
+
+	expectedCmd2 := []string{devpodExe, "ssh", "ready-container-42", "--command", "tmux has-session -t 'ready-container'"}
+	for i, v := range expectedCmd2 {
+		if executedCmds[1][i] != v {
+			t.Errorf("expected cmd2[%d] to be %q, got %q", i, v, executedCmds[1][i])
+		}
+	}
+
+	expectedCmd3 := []string{devpodExe, "ssh", "ready-container-42", "--command", "tmux send-keys -t 'ready-container' 'hello prompt' C-m"}
+	for i, v := range expectedCmd3 {
+		if executedCmds[2][i] != v {
+			t.Errorf("expected cmd3[%d] to be %q, got %q", i, v, executedCmds[2][i])
+		}
+	}
+}
+
+func TestPushPrompt_SessionNotFound(t *testing.T) {
+	cache := NewCache()
+	srv := NewServer(cache, nil)
+
+	container := &proto.DevcontainerConfig{
+		Id:    "ready-container-42",
+		State: proto.State_DCM_READY,
+	}
+	cache.Update("ready-container-42", container)
+
+	srv.SetCommandRunner(func(name string, args ...string) ([]byte, error) {
+		return nil, fmt.Errorf("session not found")
+	})
+
+	req := &proto.PushPromptRequest{
+		Id:     "ready-container-42",
+		Prompt: "hello prompt",
+	}
+
+	_, err := srv.PushPrompt(context.Background(), req)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.FailedPrecondition {
+		t.Errorf("expected FailedPrecondition, got: %v", err)
+	}
+}
+
+func TestPushPrompt_SendCommandFailure(t *testing.T) {
+	cache := NewCache()
+	srv := NewServer(cache, nil)
+
+	container := &proto.DevcontainerConfig{
+		Id:    "ready-container",
+		State: proto.State_DCM_READY,
+	}
+	cache.Update("ready-container", container)
+
+	srv.SetCommandRunner(func(name string, args ...string) ([]byte, error) {
+		if len(args) >= 4 && args[0] == "ssh" && strings.HasPrefix(args[3], "tmux send-keys") {
+			return nil, fmt.Errorf("ssh connection failed")
+		}
+		return []byte("success"), nil
+	})
+
+	req := &proto.PushPromptRequest{
+		Id:     "ready-container",
+		Prompt: "hello prompt",
+	}
+
+	_, err := srv.PushPrompt(context.Background(), req)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.Internal {
+		t.Errorf("expected Internal, got: %v", err)
 	}
 }
 
