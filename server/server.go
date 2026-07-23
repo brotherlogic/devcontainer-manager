@@ -92,7 +92,7 @@ type Server struct {
 // NewServer creates and initializes a new gRPC server implementation.
 func NewServer(cache *Cache, gitClient GitClient) *Server {
 	if gitClient == nil {
-		log.Printf("NewServer: gitClient is nil - branch auto-creation in Up will be skipped")
+		log.Printf("WARN: NewServer: gitClient is nil - branch auto-creation in Up will be skipped")
 	} else {
 		log.Printf("NewServer: gitClient is initialized")
 	}
