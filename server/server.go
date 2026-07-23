@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -239,11 +240,15 @@ func (s *Server) List(ctx context.Context, req *proto.ListRequest) (*proto.ListR
 	}, nil
 }
 
-var devpodExe = "devpod"
+var devpodExe string
 
 func init() {
-	if _, err := exec.LookPath("devpod-cli"); err == nil {
+	if path := os.Getenv("DEVPOD_CLI_PATH"); path != "" {
+		devpodExe = path
+	} else if _, err := exec.LookPath("devpod-cli"); err == nil {
 		devpodExe = "devpod-cli"
+	} else {
+		devpodExe = "devpod"
 	}
 }
 
@@ -268,14 +273,14 @@ func (s *Server) PushPrompt(ctx context.Context, req *proto.PushPromptRequest) (
 
 	id := req.GetId()
 	sessionName := id
-	_, err := s.commandRunner(devpodExe, "ssh", id, "--command", fmt.Sprintf("tmux has-session -t %s", id))
+	_, err := s.commandRunner(devpodExe, "ssh", id, "--command", fmt.Sprintf("tmux has-session -t %s", shellQuote(id)))
 	if err != nil {
 		// Fallback to base name if it is an issue container
 		lastIdx := strings.LastIndex(id, "-")
 		if lastIdx != -1 {
 			if _, errNum := strconv.Atoi(id[lastIdx+1:]); errNum == nil {
 				baseID := id[:lastIdx]
-				_, fallbackErr := s.commandRunner(devpodExe, "ssh", id, "--command", fmt.Sprintf("tmux has-session -t %s", baseID))
+				_, fallbackErr := s.commandRunner(devpodExe, "ssh", id, "--command", fmt.Sprintf("tmux has-session -t %s", shellQuote(baseID)))
 				if fallbackErr == nil {
 					err = nil
 					sessionName = baseID
@@ -288,7 +293,7 @@ func (s *Server) PushPrompt(ctx context.Context, req *proto.PushPromptRequest) (
 		return nil, status.Errorf(codes.FailedPrecondition, "tmux session not active for container %s: %v", id, err)
 	}
 
-	cmd := fmt.Sprintf("tmux send-keys -t %s %s C-m", sessionName, shellQuote(req.GetPrompt()))
+	cmd := fmt.Sprintf("tmux send-keys -t %s %s C-m", shellQuote(sessionName), shellQuote(req.GetPrompt()))
 	_, err = s.commandRunner(devpodExe, "ssh", id, "--command", cmd)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to send keys to tmux session: %v", err)

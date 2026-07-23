@@ -318,16 +318,16 @@ func TestPushPrompt_Success(t *testing.T) {
 		t.Fatalf("expected 2 commands to be executed, got %d: %v", len(executedCmds), executedCmds)
 	}
 
-	// First command: tmux has-session -t ready-container
-	expectedCmd1 := []string{devpodExe, "ssh", "ready-container", "--command", "tmux has-session -t ready-container"}
+	// First command: tmux has-session -t 'ready-container'
+	expectedCmd1 := []string{devpodExe, "ssh", "ready-container", "--command", "tmux has-session -t 'ready-container'"}
 	for i, v := range expectedCmd1 {
 		if executedCmds[0][i] != v {
 			t.Errorf("expected cmd1[%d] to be %q, got %q", i, v, executedCmds[0][i])
 		}
 	}
 
-	// Second command: tmux send-keys -t ready-container 'hello prompt' C-m
-	expectedCmd2 := []string{devpodExe, "ssh", "ready-container", "--command", "tmux send-keys -t ready-container 'hello prompt' C-m"}
+	// Second command: tmux send-keys -t 'ready-container' 'hello prompt' C-m
+	expectedCmd2 := []string{devpodExe, "ssh", "ready-container", "--command", "tmux send-keys -t 'ready-container' 'hello prompt' C-m"}
 	for i, v := range expectedCmd2 {
 		if executedCmds[1][i] != v {
 			t.Errorf("expected cmd2[%d] to be %q, got %q", i, v, executedCmds[1][i])
@@ -356,7 +356,7 @@ func TestPushPrompt_FallbackSuccess(t *testing.T) {
 	srv.SetCommandRunner(func(name string, args ...string) ([]byte, error) {
 		executedCmds = append(executedCmds, append([]string{name}, args...))
 		// Fail the direct has-session check, succeed the rest
-		if len(args) >= 4 && args[0] == "ssh" && args[3] == "tmux has-session -t ready-container-42" {
+		if len(args) >= 4 && args[0] == "ssh" && args[3] == "tmux has-session -t 'ready-container-42'" {
 			return nil, fmt.Errorf("session not found")
 		}
 		return []byte("success"), nil
@@ -380,21 +380,21 @@ func TestPushPrompt_FallbackSuccess(t *testing.T) {
 		t.Fatalf("expected 3 commands to be executed, got %d: %v", len(executedCmds), executedCmds)
 	}
 
-	expectedCmd1 := []string{devpodExe, "ssh", "ready-container-42", "--command", "tmux has-session -t ready-container-42"}
+	expectedCmd1 := []string{devpodExe, "ssh", "ready-container-42", "--command", "tmux has-session -t 'ready-container-42'"}
 	for i, v := range expectedCmd1 {
 		if executedCmds[0][i] != v {
 			t.Errorf("expected cmd1[%d] to be %q, got %q", i, v, executedCmds[0][i])
 		}
 	}
 
-	expectedCmd2 := []string{devpodExe, "ssh", "ready-container-42", "--command", "tmux has-session -t ready-container"}
+	expectedCmd2 := []string{devpodExe, "ssh", "ready-container-42", "--command", "tmux has-session -t 'ready-container'"}
 	for i, v := range expectedCmd2 {
 		if executedCmds[1][i] != v {
 			t.Errorf("expected cmd2[%d] to be %q, got %q", i, v, executedCmds[1][i])
 		}
 	}
 
-	expectedCmd3 := []string{devpodExe, "ssh", "ready-container-42", "--command", "tmux send-keys -t ready-container 'hello prompt' C-m"}
+	expectedCmd3 := []string{devpodExe, "ssh", "ready-container-42", "--command", "tmux send-keys -t 'ready-container' 'hello prompt' C-m"}
 	for i, v := range expectedCmd3 {
 		if executedCmds[2][i] != v {
 			t.Errorf("expected cmd3[%d] to be %q, got %q", i, v, executedCmds[2][i])
