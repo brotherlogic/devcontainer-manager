@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -238,6 +239,18 @@ func (s *Server) List(ctx context.Context, req *proto.ListRequest) (*proto.ListR
 	}, nil
 }
 
+var devpodExe = "devpod"
+
+func init() {
+	if _, err := exec.LookPath("devpod-cli"); err == nil {
+		devpodExe = "devpod-cli"
+	}
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
 // PushPrompt dispatches prompt payload to target container if it exists and is in DCM_READY state.
 func (s *Server) PushPrompt(ctx context.Context, req *proto.PushPromptRequest) (*proto.PushPromptResponse, error) {
 	if err := ctx.Err(); err != nil {
@@ -251,6 +264,34 @@ func (s *Server) PushPrompt(ctx context.Context, req *proto.PushPromptRequest) (
 
 	if container.GetState() != proto.State_DCM_READY {
 		return nil, status.Errorf(codes.FailedPrecondition, "container %s is not in DCM_READY state (current state: %s)", req.GetId(), container.GetState())
+	}
+
+	id := req.GetId()
+	sessionName := id
+	_, err := s.commandRunner(devpodExe, "ssh", id, "--command", fmt.Sprintf("tmux has-session -t %s", id))
+	if err != nil {
+		// Fallback to base name if it is an issue container
+		lastIdx := strings.LastIndex(id, "-")
+		if lastIdx != -1 {
+			if _, errNum := strconv.Atoi(id[lastIdx+1:]); errNum == nil {
+				baseID := id[:lastIdx]
+				_, fallbackErr := s.commandRunner(devpodExe, "ssh", id, "--command", fmt.Sprintf("tmux has-session -t %s", baseID))
+				if fallbackErr == nil {
+					err = nil
+					sessionName = baseID
+				}
+			}
+		}
+	}
+
+	if err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "tmux session not active for container %s: %v", id, err)
+	}
+
+	cmd := fmt.Sprintf("tmux send-keys -t %s %s C-m", sessionName, shellQuote(req.GetPrompt()))
+	_, err = s.commandRunner(devpodExe, "ssh", id, "--command", cmd)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to send keys to tmux session: %v", err)
 	}
 
 	return &proto.PushPromptResponse{}, nil
