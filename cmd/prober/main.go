@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -219,6 +220,7 @@ func RunProber(ctx context.Context, cfg ProberConfig, ghClient githubClient, man
 	// 5. Poll the GitHub issue comments until the first comment matches --prompt-1
 	err = pollForComment(ctx, ghClient, owner, repoName, int(issueNum), cfg.Prompt1)
 	if err != nil {
+		printRunningContainers(managerClient)
 		return err
 	}
 
@@ -234,6 +236,7 @@ func RunProber(ctx context.Context, cfg ProberConfig, ghClient githubClient, man
 	// Poll comments until matched prompt-2
 	err = pollForComment(ctx, ghClient, owner, repoName, int(issueNum), cfg.Prompt2)
 	if err != nil {
+		printRunningContainers(managerClient)
 		return err
 	}
 
@@ -291,4 +294,34 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println("Prober run completed successfully!")
+}
+
+func printRunningContainers(managerClient proto.ManagerServiceClient) {
+	listCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := managerClient.List(listCtx, &proto.ListRequest{})
+	if err != nil {
+		log.Printf("Failed to list containers: %v", err)
+		return
+	}
+	if resp == nil {
+		log.Printf("No containers returned (list response is nil)")
+		return
+	}
+
+	log.Printf("Currently running devcontainers:")
+	for _, cfg := range resp.GetConfigs() {
+		repo := ""
+		if cfg.GetRequest() != nil {
+			repo = cfg.GetRequest().GetRepo()
+		}
+		// Redact any sensitive user info/tokens from the repo URL
+		if parsed, err := url.Parse(repo); err == nil && parsed.User != nil {
+			parsed.User = url.User("redacted")
+			repo = parsed.String()
+		}
+		log.Printf("  - Container ID: %s, State: %v, Repo: %s, Error: %s",
+			cfg.GetId(), cfg.GetState(), repo, cfg.GetErrorMessage())
+	}
 }
