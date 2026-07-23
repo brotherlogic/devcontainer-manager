@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -193,24 +194,43 @@ func (s *Server) IsModelSupported(model string) bool {
 	return s.supportedModels[model]
 }
 
+var cleanStringRegex = regexp.MustCompile(`[^a-z0-9-]+`)
+
 func cleanString(s string) string {
-	reg := regexp.MustCompile(`[^a-z0-9-]+`)
-	return strings.Trim(reg.ReplaceAllString(strings.ToLower(s), "-"), "-")
+	return strings.Trim(cleanStringRegex.ReplaceAllString(strings.ToLower(s), "-"), "-")
 }
 
 func getCleanID(repoURL, branchName string, issueNum int32) string {
 	repoName := "container"
-	
-	tempRepo := repoURL
-	if idx := strings.Index(tempRepo, "/issues/"); idx != -1 {
-		tempRepo = tempRepo[:idx]
-	}
-	tempRepo = strings.TrimSuffix(tempRepo, ".git")
-	parts := strings.Split(tempRepo, "/")
-	if len(parts) > 0 {
-		repoName = parts[len(parts)-1]
-		if idx := strings.Index(repoName, ":"); idx != -1 {
-			repoName = repoName[idx+1:]
+
+	u, err := url.Parse(repoURL)
+	if err == nil && u.Path != "" && (strings.HasPrefix(repoURL, "http://") || strings.HasPrefix(repoURL, "https://")) {
+		path := strings.TrimSuffix(u.Path, ".git")
+		if idx := strings.Index(path, "/issues/"); idx != -1 {
+			path = path[:idx]
+		}
+
+		parts := strings.Split(path, "/")
+		for i := len(parts) - 1; i >= 0; i-- {
+			part := parts[i]
+			if part != "" {
+				repoName = part
+				break
+			}
+		}
+	} else if strings.HasPrefix(repoURL, "git@") {
+		if idx := strings.Index(repoURL, ":"); idx != -1 {
+			path := strings.TrimSuffix(repoURL[idx+1:], ".git")
+			if lastSlash := strings.LastIndex(path, "/"); lastSlash != -1 {
+				repoName = path[lastSlash+1:]
+			} else {
+				repoName = path
+			}
+		}
+	} else {
+		parts := strings.Split(repoURL, "/")
+		if len(parts) > 0 {
+			repoName = parts[len(parts)-1]
 		}
 	}
 
