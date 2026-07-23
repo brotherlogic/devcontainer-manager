@@ -106,6 +106,7 @@ func pollForComment(ctx context.Context, ghClient githubClient, owner, repo stri
 		case <-ticker.C:
 			comments, err := ghClient.ListComments(ctx, owner, repo, issueNum)
 			if err != nil {
+				log.Printf("Warning: failed to list comments during polling: %v", err)
 				continue
 			}
 			for _, c := range comments {
@@ -142,6 +143,7 @@ func pollForContainerDeletion(ctx context.Context, managerClient proto.ManagerSe
 		case <-ticker.C:
 			resp, err := managerClient.List(ctx, &proto.ListRequest{})
 			if err != nil {
+				log.Printf("Warning: failed to list containers during polling: %v", err)
 				continue
 			}
 			found := false
@@ -203,7 +205,7 @@ func RunProber(ctx context.Context, cfg ProberConfig, ghClient githubClient, man
 	}()
 
 	// 4. Connect to the manager gRPC server and call the Up RPC with the newly created issue URL
-	branchName := "feature/test-" + title[7:] // strip "[test] "
+	branchName := "feature/test-" + strings.TrimPrefix(title, "[test] ")
 	upResp, err := managerClient.Up(ctx, &proto.UpRequest{
 		Repo:       issueURL,
 		Branch:     branchName,
