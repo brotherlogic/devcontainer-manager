@@ -223,6 +223,7 @@ func TestRunProber_FailureCleanup(t *testing.T) {
 	var (
 		downCalled  bool
 		issueClosed bool
+		listCalled  bool
 	)
 
 	ghMock := &mockGitHubClient{
@@ -255,6 +256,20 @@ func TestRunProber_FailureCleanup(t *testing.T) {
 			downCalled = true
 			return &proto.DownResponse{}, nil
 		},
+		listFunc: func(ctx context.Context, in *proto.ListRequest) (*proto.ListResponse, error) {
+			listCalled = true
+			return &proto.ListResponse{
+				Configs: []*proto.DevcontainerConfig{
+					{
+						Id: "brotherlogic-devcontainer-manager-456",
+						Request: &proto.UpRequest{
+							Repo: issueURL,
+						},
+						State: proto.State_DCM_HARNESS,
+					},
+				},
+			}, nil
+		},
 	}
 
 	err := RunProber(context.Background(), cfg, ghMock, mgrMock)
@@ -267,5 +282,8 @@ func TestRunProber_FailureCleanup(t *testing.T) {
 	}
 	if !issueClosed {
 		t.Error("expected issue to be closed on failure")
+	}
+	if !listCalled {
+		t.Error("expected List RPC to be called on failure")
 	}
 }

@@ -132,6 +132,7 @@ DCM includes a standalone integration prober tool under `cmd/prober/main.go` tha
 * **Provisioning Validation:** Submits an `Up` RPC request to the manager using the issue URL.
 * **Prompt Loop Verification:** Polls the issue comments until the container posts the first prompt response (`hello`), then calls `PushPrompt` with the second prompt (`goodbye`) and verifies its response.
 * **Destruction & Cleanup:** Calls the `Down` RPC, verifies the container is deleted from the `List` RPC, closes the test GitHub issue, and cleans up resources even in case of timeouts or failure.
+* **Failure Diagnostics:** Outputs all currently running devcontainers if the comment polling times out or fails, enabling easier debugging of provisioning issues.
 
 ### Running the Prober:
 ```bash
