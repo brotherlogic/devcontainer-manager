@@ -263,7 +263,7 @@ func TestRunProber_FailureCleanup(t *testing.T) {
 					{
 						Id: "brotherlogic-devcontainer-manager-456",
 						Request: &proto.UpRequest{
-							Repo: issueURL,
+							Repo: "https://user:pass@github.com/brotherlogic/devcontainer-manager/issues/456",
 						},
 						State: proto.State_DCM_HARNESS,
 					},

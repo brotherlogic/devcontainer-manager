@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -314,6 +315,11 @@ func printRunningContainers(managerClient proto.ManagerServiceClient) {
 		repo := ""
 		if cfg.GetRequest() != nil {
 			repo = cfg.GetRequest().GetRepo()
+		}
+		// Redact any sensitive user info/tokens from the repo URL
+		if parsed, err := url.Parse(repo); err == nil && parsed.User != nil {
+			parsed.User = url.User("redacted")
+			repo = parsed.String()
 		}
 		log.Printf("  - Container ID: %s, State: %v, Repo: %s, Error: %s",
 			cfg.GetId(), cfg.GetState(), repo, cfg.GetErrorMessage())
