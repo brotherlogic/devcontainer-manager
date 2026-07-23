@@ -2015,3 +2015,87 @@ func TestReportStartupFailure_LogTooLong(t *testing.T) {
 		t.Error("expected create issue to be called")
 	}
 }
+
+func TestRun_ProcessManualUpRequestsInDcmReceivedState(t *testing.T) {
+	// Create a temporary container list file with a dummy repo
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("# comment line\n"); err != nil {
+		t.Fatalf("failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	// Inject nil gitHubClientProvider to avoid listing issues or doing GitHub calls
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return nil, fmt.Errorf("no github client")
+	}
+
+	// Mock commandRunner
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			// Return empty list of running containers initially
+			return []byte(`[]`), nil
+		}
+		return []byte("success"), nil
+	}
+
+	// Put a DCM_RECEIVED container in globalCache
+	manualConfigID := "brotherlogic/test-repo-manual-branch"
+	manualConfig := &proto.DevcontainerConfig{
+		Id: manualConfigID,
+		Request: &proto.UpRequest{
+			Repo:   "brotherlogic/test-repo",
+			Branch: "manual-branch",
+		},
+		State: proto.State_DCM_RECEIVED,
+	}
+	globalCache.Update(manualConfigID, manualConfig)
+	defer globalCache.Delete(manualConfigID)
+
+	cfg := &config{
+		once:               true,
+		containerList:      tmpFile.Name(),
+		maxIssueContainers: 5,
+	}
+
+	err = run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify that devpod up was called with the correct parameters for the manual container
+	var devpodUpCalled bool
+	for _, cmd := range capturedCommands {
+		if len(cmd) > 3 && cmd[0] == devpodExe && cmd[1] == "up" {
+			// Expected args: "devpod", "up", "git@github.com:brotherlogic/test-repo@manual-branch", "--id", "brotherlogic/test-repo-manual-branch", "--ide", "none"
+			if cmd[2] == "git@github.com:brotherlogic/test-repo@manual-branch" && cmd[4] == manualConfigID {
+				devpodUpCalled = true
+			}
+		}
+	}
+
+	if !devpodUpCalled {
+		t.Errorf("expected devpod up to be called for manual container, captured commands: %v", capturedCommands)
+	}
+
+	// Verify cache state transitioned to DCM_READY
+	cached, ok := globalCache.Get(manualConfigID)
+	if !ok {
+		t.Fatalf("expected manual container to remain in cache")
+	}
+	if cached.State != proto.State_DCM_READY {
+		t.Errorf("expected cache state to transition to DCM_READY, got %v", cached.State)
+	}
+}
+

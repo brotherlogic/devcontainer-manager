@@ -265,9 +265,9 @@ func syncCacheWithRunning(running map[string]bool) {
 		}
 	}
 
-	// 2. Remove containers from cache that are NOT in devpod list and not in STARTING status
+	// 2. Remove containers from cache that are NOT in devpod list and not in STARTING/RECEIVED status
 	for _, c := range globalCache.List() {
-		if !running[c.Id] && c.State != proto.State_DCM_CREATING {
+		if !running[c.Id] && c.State != proto.State_DCM_CREATING && c.State != proto.State_DCM_RECEIVED {
 			globalCache.Delete(c.Id)
 		}
 	}
@@ -386,6 +386,62 @@ func run(ctx context.Context, cfg *config) error {
 		running[w.ID] = true
 	}
 	syncCacheWithRunning(running)
+
+	// Process manual Up requests that are in DCM_RECEIVED state
+	for _, c := range globalCache.List() {
+		if c.State == proto.State_DCM_RECEIVED {
+			// Update state to DCM_CREATING to lock it
+			c.State = proto.State_DCM_CREATING
+			globalCache.Update(c.Id, c)
+
+			wg.Add(1)
+			go func(config *proto.DevcontainerConfig) {
+				defer wg.Done()
+
+				req := config.Request
+				repoURL := req.GetRepo()
+				if !strings.HasPrefix(repoURL, "git@") && !strings.HasPrefix(repoURL, "http://") && !strings.HasPrefix(repoURL, "https://") {
+					repoURL = fmt.Sprintf("git@github.com:%s", repoURL)
+				}
+				if req.GetBranch() != "" && !strings.HasSuffix(repoURL, "@"+req.GetBranch()) {
+					repoURL = fmt.Sprintf("%s@%s", repoURL, req.GetBranch())
+				}
+
+				// Execute container provisioning logic
+				logWithPrefix(config.Id, "Manually launching container %s on repo %s", config.Id, repoURL)
+				out, err := runCommandWithLog(config.Id, devpodExe, "up", repoURL, "--id", config.Id, "--ide", "none")
+				if err != nil {
+					logWithPrefix(config.Id, "Failed to manually launch devcontainer: %v (output: %s)", err, string(out))
+					config.State = proto.State_DCM_FAILED
+					config.ErrorMessage = err.Error()
+					globalCache.Update(config.Id, config)
+
+					// Delete container so it can be re-provisioned next time
+					if delErr := deleteContainer(req.GetRepo(), config.Id); delErr != nil {
+						logWithPrefix(config.Id, "Warning: failed to delete failed devcontainer %s: %v", config.Id, delErr)
+					}
+					// Ensure the failed status remains in the cache
+					globalCache.Update(config.Id, config)
+				} else {
+					config.State = proto.State_DCM_READY
+					globalCache.Update(config.Id, config)
+
+					renameDockerContainer(config.Id)
+
+					cmdToInject := cfg.startupCommand
+					if cmdToInject != "" {
+						wg.Add(1)
+						go func(cid string) {
+							defer wg.Done()
+							if err := injectStartupCommand(ctx, req.GetRepo(), cid, cmdToInject); err != nil {
+								logWithPrefix(cid, "ERROR: Failed to inject startup command for container %s: %v", cid, err)
+							}
+						}(config.Id)
+					}
+				}
+			}(c)
+		}
+	}
 
 	trackedSHAs := loadTrackedSHAs()
 	trackedSHAsChanged := false
