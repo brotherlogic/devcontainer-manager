@@ -9,7 +9,7 @@
 *   **Continuous Synchronization:** Detects configuration changes in remote templates and aligns local devcontainers by rebuilding or cleaning them up.
 *   **Startup Failure Recovery:** Automatically deletes devcontainers if they fail to start properly, allowing them to be cleanly re-provisioned from head on the next cycle.
 *   **Fresh Issue Containers:** Forces devpod to recreate issue containers to always pull the freshest container config from head, bypassing the local cache.
-*   **GitHub Issue Devcontainers:** Automatically provisions dedicated devcontainers for open issues containing `seraphine` labels, handling state labels (`container-creating`, `container-ready`, `container-failed`) dynamically.
+*   **GitHub Issue Devcontainers:** Automatically provisions dedicated devcontainers for open issues containing `seraphine` labels, querying both issue metadata and bodies to deduplicate container reports, and handling state labels (`container-creating`, `container-ready`, `container-failed`) dynamically.
 *   **Container Prioritization:** Dynamically orders container startup operations, prioritizing repositories that have been most recently updated (pushed) on GitHub.
 *   **Deterministic Caching:** Minimizes rebuild times by storing composite SHAs of configurations and script dependencies in a state cache.
 *   **Deterministic Branch Slugs:** Generates consistent, 3-word branch names from issue titles locally without relying on external APIs, preventing provisioning failures caused by network timeouts or empty LLM outputs.
