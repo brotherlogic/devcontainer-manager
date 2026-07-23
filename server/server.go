@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -192,6 +194,62 @@ func (s *Server) IsModelSupported(model string) bool {
 	return s.supportedModels[model]
 }
 
+var cleanStringRegex = regexp.MustCompile(`[^a-z0-9-]+`)
+
+func cleanString(s string) string {
+	return strings.Trim(cleanStringRegex.ReplaceAllString(strings.ToLower(s), "-"), "-")
+}
+
+func getCleanID(repoURL, branchName string, issueNum int32) string {
+	repoName := "container"
+
+	u, err := url.Parse(repoURL)
+	if err == nil && u.Path != "" && (strings.HasPrefix(repoURL, "http://") || strings.HasPrefix(repoURL, "https://")) {
+		path := strings.TrimSuffix(u.Path, ".git")
+		if idx := strings.Index(path, "/issues/"); idx != -1 {
+			path = path[:idx]
+		}
+
+		parts := strings.Split(path, "/")
+		for i := len(parts) - 1; i >= 0; i-- {
+			part := parts[i]
+			if part != "" {
+				repoName = part
+				break
+			}
+		}
+	} else if strings.HasPrefix(repoURL, "git@") {
+		if idx := strings.Index(repoURL, ":"); idx != -1 {
+			path := strings.TrimSuffix(repoURL[idx+1:], ".git")
+			if lastSlash := strings.LastIndex(path, "/"); lastSlash != -1 {
+				repoName = path[lastSlash+1:]
+			} else {
+				repoName = path
+			}
+		}
+	} else {
+		parts := strings.Split(repoURL, "/")
+		if len(parts) > 0 {
+			repoName = parts[len(parts)-1]
+		}
+	}
+
+	cleanRepo := cleanString(repoName)
+	cleanBranch := cleanString(branchName)
+
+	var id string
+	if issueNum > 0 {
+		id = fmt.Sprintf("%s-%d", cleanRepo, issueNum)
+	} else {
+		id = fmt.Sprintf("%s-%s", cleanRepo, cleanBranch)
+	}
+
+	if len(id) > 63 {
+		id = id[:63]
+	}
+	return strings.TrimSuffix(id, "-")
+}
+
 // Up handles creating/starting a devcontainer workspace request with model validation and branch auto-creation.
 func (s *Server) Up(ctx context.Context, req *proto.UpRequest) (*proto.UpResponse, error) {
 	if err := ctx.Err(); err != nil {
@@ -219,8 +277,13 @@ func (s *Server) Up(ctx context.Context, req *proto.UpRequest) (*proto.UpRespons
 		}
 	}
 
+	var issueNum int32
+	if req.GetIdentifier() != nil {
+		issueNum = req.GetIdentifier().GetIssueNumber()
+	}
+
 	config := &proto.DevcontainerConfig{
-		Id:      fmt.Sprintf("%s-%s", req.GetRepo(), req.GetBranch()),
+		Id:      getCleanID(req.GetRepo(), req.GetBranch(), issueNum),
 		Request: req,
 		State:   proto.State_DCM_RECEIVED,
 	}

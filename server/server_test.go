@@ -142,7 +142,7 @@ func TestUpRPCExistingBranch(t *testing.T) {
 		t.Fatalf("Up failed: %v", err)
 	}
 
-	if resp.Config.Id != "brotherlogic/test-repo-feature/test" {
+	if resp.Config.Id != "test-repo-feature-test" {
 		t.Errorf("unexpected config ID: got %s", resp.Config.Id)
 	}
 
@@ -169,12 +169,35 @@ func TestUpRPCAutoCreateBranch(t *testing.T) {
 		t.Fatalf("Up failed: %v", err)
 	}
 
-	if resp.Config.Id != "brotherlogic/test-repo-feature/new-branch" {
+	if resp.Config.Id != "test-repo-feature-new-branch" {
 		t.Errorf("unexpected config ID: got %s", resp.Config.Id)
 	}
 
 	if base, created := mockGit.createdBranches["feature/new-branch"]; !created || base != "main" {
 		t.Errorf("expected branch feature/new-branch created off main, got base %s (created=%v)", base, created)
+	}
+}
+
+func TestUpRPCIssueCleanID(t *testing.T) {
+	cache := NewCache()
+	server := NewServer(cache, nil)
+
+	req := &proto.UpRequest{
+		Repo:   "https://github.com/brotherlogic/devcontainer-manager/issues/275",
+		Branch: "feature/test-38b30f88-4354-48d5-89a0-3d0148797d3a",
+		Identifier: &proto.Identifier{
+			Id: &proto.Identifier_IssueNumber{IssueNumber: 275},
+		},
+	}
+
+	resp, err := server.Up(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Up failed: %v", err)
+	}
+
+	expectedID := "devcontainer-manager-275"
+	if resp.Config.Id != expectedID {
+		t.Errorf("expected config ID %q, got %q", expectedID, resp.Config.Id)
 	}
 }
 
