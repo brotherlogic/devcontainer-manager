@@ -2051,7 +2051,7 @@ func TestRun_ProcessManualUpRequestsInDcmReceivedState(t *testing.T) {
 	}
 
 	// Put a DCM_RECEIVED container in globalCache
-	manualConfigID := "brotherlogic/test-repo-manual-branch"
+	manualConfigID := "test-repo-manual-branch"
 	manualConfig := &proto.DevcontainerConfig{
 		Id: manualConfigID,
 		Request: &proto.UpRequest{
