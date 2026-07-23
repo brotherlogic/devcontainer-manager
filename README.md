@@ -123,6 +123,23 @@ DCM hosts a gRPC service implementing `ManagerService` defined in `proto/manager
 
 ---
 
+## 🔎 Integration Prober CLI
+
+DCM includes a standalone integration prober tool under `cmd/prober/main.go` that validates the end-to-end lifecycle of devcontainer workspaces managed by `devcontainer-manager`.
+
+### Capabilities:
+* **GitHub Issue Lifecycle:** Creates a temporary test issue (`[test] <uuid>`) in the target repository.
+* **Provisioning Validation:** Submits an `Up` RPC request to the manager using the issue URL.
+* **Prompt Loop Verification:** Polls the issue comments until the container posts the first prompt response (`hello`), then calls `PushPrompt` with the second prompt (`goodbye`) and verifies its response.
+* **Destruction & Cleanup:** Calls the `Down` RPC, verifies the container is deleted from the `List` RPC, closes the test GitHub issue, and cleans up resources even in case of timeouts or failure.
+
+### Running the Prober:
+```bash
+go run cmd/prober/main.go --server localhost:50051 --repo brotherlogic/devcontainer-manager --prompt-1 hello --prompt-2 goodbye --timeout 5m
+```
+
+---
+
 ## 🤖 Automated GitHub Workflows
 
 The repository includes pre-configured automation workflows under `.github/workflows/`:
