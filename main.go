@@ -885,6 +885,7 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 			logWithPrefix(config.Id, "Warning: failed to delete failed devcontainer %s: %v", config.Id, delErr)
 		}
 
+		// Trigger startup failure reporting if the manual container creation fails.
 		client, _ := gitHubClientProvider()
 		if client != nil {
 			owner, repoName := "", ""
