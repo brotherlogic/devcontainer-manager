@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -1712,61 +1713,32 @@ func renameDockerContainer(workspaceID string) {
 	}
 }
 
-// No-op change to trigger CI for issue 98
-
+// reportStartupFailure reports startup failure logs back to GitHub issues.
+// It first attempts to write to the target repository using createIssueWithDeduplication,
+// and falls back to writing to brotherlogic/devcontainer-manager if it encounters a permission error.
 func reportStartupFailure(ctx context.Context, client *github.Client, owner, repo, branch string, originalIssueNum int, startupErr error, outputLog string) {
 	if client == nil {
 		return
 	}
 
-	issues, err := listOpenIssuesProvider(ctx, client, owner, repo)
+	err := createIssueWithDeduplication(ctx, client, owner, repo, owner, repo, branch, originalIssueNum, startupErr, outputLog)
 	if err != nil {
-		log.Printf("Warning: failed to list issues for %s/%s during startup failure reporting: %v", owner, repo, err)
-		return
-	}
-
-	for _, issue := range issues {
-		if issue.GetTitle() == "Issue Container Startup Failed" {
-			log.Printf("An open issue 'Issue Container Startup Failed' already exists in %s/%s. Skipping creation.", owner, repo)
-			return
+		isPermissionError := false
+		var errResponse *github.ErrorResponse
+		if errors.As(err, &errResponse) && errResponse.Response != nil {
+			if errResponse.Response.StatusCode == http.StatusForbidden || errResponse.Response.StatusCode == http.StatusNotFound {
+				isPermissionError = true
+			}
 		}
-	}
 
-	const (
-		GitHubIssueBodyLimit = 65000
-		TruncMsg             = "[logs truncated due to size limit] ...\n"
-	)
-
-	if len(outputLog) > GitHubIssueBodyLimit {
-		outputLog = TruncMsg + outputLog[len(outputLog)-(GitHubIssueBodyLimit-len(TruncMsg)):]
-	}
-
-	var bodyBuilder strings.Builder
-	bodyBuilder.WriteString("### Devcontainer Startup Failure Report\n\n")
-	bodyBuilder.WriteString(fmt.Sprintf("* **Branch:** `%s`\n", branch))
-	bodyBuilder.WriteString(fmt.Sprintf("* **Original Issue:** #%d\n\n", originalIssueNum))
-	bodyBuilder.WriteString("#### Startup Log / Error Message\n")
-	bodyBuilder.WriteString("```\n")
-	if startupErr != nil {
-		bodyBuilder.WriteString(fmt.Sprintf("Error: %v\n", startupErr))
-	}
-	if outputLog != "" {
-		bodyBuilder.WriteString(outputLog)
-		bodyBuilder.WriteString("\n")
-	}
-	bodyBuilder.WriteString("```\n")
-
-	bodyStr := bodyBuilder.String()
-
-	req := &github.IssueRequest{
-		Title:  github.String("Issue Container Startup Failed"),
-		Body:   github.String(bodyStr),
-		Labels: &[]string{"seraphine-bug"},
-	}
-
-	_, _, err = client.Issues.Create(ctx, owner, repo, req)
-	if err != nil {
-		log.Printf("Warning: failed to create startup failure issue in %s/%s: %v", owner, repo, err)
+		if isPermissionError {
+			fallbackErr := createIssueWithDeduplication(ctx, client, "brotherlogic", "devcontainer-manager", owner, repo, branch, originalIssueNum, startupErr, outputLog)
+			if fallbackErr != nil {
+				log.Printf("Warning: failed to create startup failure issue in fallback repository brotherlogic/devcontainer-manager: %v", fallbackErr)
+			}
+		} else {
+			log.Printf("Warning: failed to create startup failure issue in %s/%s: %v", owner, repo, err)
+		}
 	}
 }
 

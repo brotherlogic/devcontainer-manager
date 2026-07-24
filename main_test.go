@@ -2368,4 +2368,71 @@ func TestCreateIssueWithDeduplication(t *testing.T) {
 	})
 }
 
+func TestReportStartupFailure_Fallback(t *testing.T) {
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	var targetListCalled, targetCreateCalled bool
+	var fallbackListCalled, fallbackCreateCalled bool
+
+	// Mock target repo issues endpoint
+	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost {
+			targetCreateCalled = true
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"message": "Resource not accessible by integration", "documentation_url": "https://docs.github.com"}`)
+			return
+		}
+		targetListCalled = true
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `[]`)
+	})
+
+	// Mock fallback repo issues endpoint
+	mux.HandleFunc("/repos/brotherlogic/devcontainer-manager/issues", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost {
+			fallbackCreateCalled = true
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"number": 287}`)
+			return
+		}
+		fallbackListCalled = true
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `[]`)
+	})
+
+	// Mock listOpenIssuesProvider to fall back to the mock client endpoint
+	originalListProvider := listOpenIssuesProvider
+	defer func() { listOpenIssuesProvider = originalListProvider }()
+	listOpenIssuesProvider = func(ctx context.Context, cl *github.Client, owner, repo string) ([]*github.Issue, error) {
+		// Mock list behavior by fetching from client Issues service directly to match mock server
+		issues, _, err := cl.Issues.ListByRepo(ctx, owner, repo, &github.IssueListByRepoOptions{State: "open"})
+		return issues, err
+	}
+
+	reportStartupFailure(context.Background(), client, "test-owner", "test-repo", "feature/my-branch_42", 42, fmt.Errorf("some startup error"), "some log output")
+
+	if !targetListCalled {
+		t.Error("expected list issues on target repository to be called")
+	}
+	if !targetCreateCalled {
+		t.Error("expected create issue on target repository to be called")
+	}
+	if !fallbackListCalled {
+		t.Error("expected list issues on fallback repository to be called")
+	}
+	if !fallbackCreateCalled {
+		t.Error("expected create issue on fallback repository to be called")
+	}
+}
+
+
 
