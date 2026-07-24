@@ -884,6 +884,36 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 		if delErr := deleteContainer(req.GetRepo(), config.Id); delErr != nil {
 			logWithPrefix(config.Id, "Warning: failed to delete failed devcontainer %s: %v", config.Id, delErr)
 		}
+
+		client, _ := gitHubClientProvider()
+		if client != nil {
+			owner, repoName := "", ""
+			cleanRepo := req.GetRepo()
+			if idx := strings.Index(cleanRepo, "/issues/"); idx != -1 {
+				cleanRepo = cleanRepo[:idx]
+			}
+			cleanRepo = strings.TrimPrefix(cleanRepo, "https://github.com/")
+			cleanRepo = strings.TrimPrefix(cleanRepo, "http://github.com/")
+			if idx := strings.Index(cleanRepo, "github.com:"); idx != -1 {
+				cleanRepo = cleanRepo[idx+len("github.com:"):]
+			} else if idx := strings.Index(cleanRepo, "@"); idx != -1 {
+				cleanRepo = cleanRepo[idx+1:]
+			}
+			cleanRepo = strings.TrimSuffix(cleanRepo, ".git")
+			parts := strings.Split(cleanRepo, "/")
+			if len(parts) >= 2 {
+				owner = parts[0]
+				repoName = parts[1]
+			}
+
+			if owner != "" && repoName != "" {
+				var issueNum int32
+				if req.GetIdentifier() != nil {
+					issueNum = req.GetIdentifier().GetIssueNumber()
+				}
+				go reportStartupFailure(ctx, client, owner, repoName, req.GetBranch(), int(issueNum), err, string(out))
+			}
+		}
 	} else {
 		config.State = proto.State_DCM_READY
 		globalCache.Update(config.Id, config)

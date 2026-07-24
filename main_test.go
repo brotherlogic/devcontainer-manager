@@ -2434,5 +2434,108 @@ func TestReportStartupFailure_Fallback(t *testing.T) {
 	}
 }
 
+func TestProcessManualUpRequest_FailureTriggersReportStartupFailure(t *testing.T) {
+	// Create mock GitHub server
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	// Inject gitHubClientProvider mock
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+
+	// Mock listOpenIssuesProvider to fall back to the mock client endpoint
+	originalListProvider := listOpenIssuesProvider
+	defer func() { listOpenIssuesProvider = originalListProvider }()
+	listOpenIssuesProvider = func(ctx context.Context, cl *github.Client, owner, repo string) ([]*github.Issue, error) {
+		issues, _, err := cl.Issues.ListByRepo(ctx, owner, repo, &github.IssueListByRepoOptions{State: "open"})
+		return issues, err
+	}
+
+	// Mock commandRunner
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		if name == devpodExe && len(args) > 0 && args[0] == "up" {
+			return []byte("failed to start container: port conflict"), fmt.Errorf("exit status 1")
+		}
+		if name == "docker" && len(args) > 0 && args[0] == "rm" {
+			return []byte("removed"), nil
+		}
+		return []byte(""), nil
+	}
+
+	// Capture GitHub API requests
+	var createCalled bool
+	var capturedBody string
+	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost {
+			createCalled = true
+			var reqBody struct {
+				Title string `json:"title"`
+				Body  string `json:"body"`
+			}
+			json.NewDecoder(r.Body).Decode(&reqBody)
+			capturedBody = reqBody.Body
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"number": 100}`)
+			return
+		}
+		// List issues
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `[]`)
+	})
+
+	// Setup DevcontainerConfig manual request
+	manualConfigID := "test-repo-manual-failure"
+	manualConfig := &proto.DevcontainerConfig{
+		Id: manualConfigID,
+		Request: &proto.UpRequest{
+			Repo:   "https://github.com/test-owner/test-repo/issues/123",
+			Branch: "my-manual-branch",
+			Identifier: &proto.Identifier{
+				Id: &proto.Identifier_IssueNumber{IssueNumber: 123},
+			},
+		},
+		State: proto.State_DCM_RECEIVED,
+	}
+	globalCache.Update(manualConfigID, manualConfig)
+	defer globalCache.Delete(manualConfigID)
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+	wg.Add(1)
+
+	processManualUpRequest(context.Background(), manualConfig, &wg, &config{}, sem)
+	wg.Wait()
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify GitHub issue creation was triggered with correct content
+	if !createCalled {
+		t.Error("expected reportStartupFailure to be triggered and create a GitHub issue, but it was not")
+	}
+	if !strings.Contains(capturedBody, "failed to start container: port conflict") {
+		t.Errorf("expected issue body to contain startup log/error, got %q", capturedBody)
+	}
+	if !strings.Contains(capturedBody, "* **Branch:** `my-manual-branch`") {
+		t.Errorf("expected issue body to contain branch, got %q", capturedBody)
+	}
+	if !strings.Contains(capturedBody, "* **Original Issue:** #123") {
+		t.Errorf("expected issue body to contain original issue number, got %q", capturedBody)
+	}
+}
+
+
 
 
