@@ -1713,8 +1713,9 @@ func renameDockerContainer(workspaceID string) {
 	}
 }
 
-// No-op change to trigger CI for issue 98
-
+// reportStartupFailure reports startup failure logs back to GitHub issues.
+// It first attempts to write to the target repository using createIssueWithDeduplication,
+// and falls back to writing to brotherlogic/devcontainer-manager if it encounters a permission error.
 func reportStartupFailure(ctx context.Context, client *github.Client, owner, repo, branch string, originalIssueNum int, startupErr error, outputLog string) {
 	if client == nil {
 		return
