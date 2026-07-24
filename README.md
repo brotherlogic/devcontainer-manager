@@ -20,6 +20,7 @@
 *   **GitHub API Rate Limit Retries:** Wraps GitHub API calls in a retry handler that performs exponential backoff when encountering rate limit responses (HTTP 403 or 429).
 *   **Latency Metric Tracking:** Automatically calculates and logs startup latency metrics for GitHub issues by recording `devcontainer-startup-latency` to GitHub comments after successful container provisioning. Includes robust test cases to verify error handling and prevent duplicate postings.
 *   **Manual Container Provisioning:** Processes manually-triggered container start requests (transitioning them from `DCM_RECEIVED` to `DCM_CREATING` and then to `DCM_READY`) via the gRPC interface asynchronously, handling provisioning failures gracefully. Sanitizes container IDs to conform to Devpod's workspace naming conventions (lowercase letters, numbers, and dashes) and extracts valid repository clone URLs from issue links.
+*   **Startup Failure Deduplication:** Avoids filing duplicate GitHub issues for container startup failures using a helper function that checks for pre-existing open issues with the title `Issue Container Startup Failed`. If writing to the fallback repository (`devcontainer-manager`), it checks for the specific target repository reference in the issue body. Enforces a 65,000 character limit on the log content, truncating and prepending a truncation message if exceeded.
 ---
 
 ## 🛠️ Architecture & Workflow
