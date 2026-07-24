@@ -118,11 +118,12 @@ var gitHubClientProvider = getGHClient
 
 var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, owner, repoName string) ([]*github.Issue, error) {
 	repoPath := fmt.Sprintf("%s/%s", owner, repoName)
-	out, err := commandRunner("gh", "issue", "list", "-R", repoPath, "--state", "open", "--json", "number,title,labels,assignees")
+	out, err := commandRunner("gh", "issue", "list", "-R", repoPath, "--state", "open", "--json", "number,title,labels,assignees,body")
 	if err == nil {
 		var rawIssues []struct {
 			Number int    `json:"number"`
 			Title  string `json:"title"`
+			Body   string `json:"body"`
 			Labels []struct {
 				Name string `json:"name"`
 			} `json:"labels"`
@@ -135,6 +136,7 @@ var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, ow
 			for _, raw := range rawIssues {
 				num := raw.Number
 				title := raw.Title
+				body := raw.Body
 				var labels []*github.Label
 				for _, lbl := range raw.Labels {
 					name := lbl.Name
@@ -156,6 +158,7 @@ var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, ow
 				issues = append(issues, &github.Issue{
 					Number:    &num,
 					Title:     &title,
+					Body:      &body,
 					Labels:    labels,
 					Assignee:  assignee,
 					Assignees: assignees,

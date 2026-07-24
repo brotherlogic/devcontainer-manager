@@ -1590,7 +1590,7 @@ func TestListOpenIssuesProvider_Success(t *testing.T) {
 		t.Errorf("expected commandName 'gh', got '%s'", commandName)
 	}
 
-	expectedArgs := []string{"issue", "list", "-R", "brotherlogic/devcontainer-manager", "--state", "open", "--json", "number,title,labels,assignees"}
+	expectedArgs := []string{"issue", "list", "-R", "brotherlogic/devcontainer-manager", "--state", "open", "--json", "number,title,labels,assignees,body"}
 	if len(commandArgs) != len(expectedArgs) {
 		t.Fatalf("expected %d args, got %d", len(expectedArgs), len(commandArgs))
 	}
@@ -1616,6 +1616,58 @@ func TestListOpenIssuesProvider_Success(t *testing.T) {
 		t.Errorf("unexpected labels: %v", issues[0].Labels)
 	}
 }
+
+func TestListOpenIssuesProvider_WithBody(t *testing.T) {
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	mockJSON := `[
+		{
+			"number": 169,
+			"title": "Use gh tool to list open issues rather than pulling from http",
+			"body": "This is the body of the issue",
+			"labels": [
+				{"name": "container-ready"}
+			]
+		}
+	]`
+
+	var commandName string
+	var commandArgs []string
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		commandName = name
+		commandArgs = args
+		return []byte(mockJSON), nil
+	}
+
+	issues, err := listOpenIssuesProvider(context.Background(), nil, "brotherlogic", "devcontainer-manager")
+	if err != nil {
+		t.Fatalf("listOpenIssuesProvider failed: %v", err)
+	}
+
+	if commandName != "gh" {
+		t.Errorf("expected commandName 'gh', got '%s'", commandName)
+	}
+
+	expectedArgs := []string{"issue", "list", "-R", "brotherlogic/devcontainer-manager", "--state", "open", "--json", "number,title,labels,assignees,body"}
+	if len(commandArgs) != len(expectedArgs) {
+		t.Fatalf("expected %d args, got %d", len(expectedArgs), len(commandArgs))
+	}
+	for i, v := range expectedArgs {
+		if commandArgs[i] != v {
+			t.Errorf("arg %d: expected '%s', got '%s'", i, v, commandArgs[i])
+		}
+	}
+
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 issue, got %d", len(issues))
+	}
+	if issues[0].GetBody() != "This is the body of the issue" {
+		t.Errorf("expected body 'This is the body of the issue', got '%s'", issues[0].GetBody())
+	}
+}
+
 
 func TestPostLatencyComment_AlreadyExists(t *testing.T) {
 	mux := http.NewServeMux()
