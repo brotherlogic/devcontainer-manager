@@ -1770,6 +1770,72 @@ func reportStartupFailure(ctx context.Context, client *github.Client, owner, rep
 	}
 }
 
+func createIssueWithDeduplication(ctx context.Context, client *github.Client, destOwner, destRepo, targetOwner, targetRepo, branch string, originalIssueNum int, startupErr error, outputLog string) error {
+	if client == nil {
+		return fmt.Errorf("github client is nil")
+	}
+
+	issues, err := listOpenIssuesProvider(ctx, client, destOwner, destRepo)
+	if err != nil {
+		return fmt.Errorf("failed to list open issues: %w", err)
+	}
+
+	for _, issue := range issues {
+		if issue.GetTitle() == "Issue Container Startup Failed" {
+			if destRepo == "devcontainer-manager" {
+				targetRef := fmt.Sprintf("**Target Repository:** %s/%s", targetOwner, targetRepo)
+				if strings.Contains(issue.GetBody(), targetRef) {
+					log.Printf("An open issue 'Issue Container Startup Failed' for %s/%s already exists in %s/%s. Skipping creation.", targetOwner, targetRepo, destOwner, destRepo)
+					return nil
+				}
+			} else {
+				log.Printf("An open issue 'Issue Container Startup Failed' already exists in %s/%s. Skipping creation.", destOwner, destRepo)
+				return nil
+			}
+		}
+	}
+
+	const (
+		GitHubIssueBodyLimit = 65000
+		TruncMsg             = "[logs truncated due to size limit] ...\n"
+	)
+
+	if len(outputLog) > GitHubIssueBodyLimit {
+		outputLog = TruncMsg + outputLog[:GitHubIssueBodyLimit-len(TruncMsg)]
+	}
+
+	var bodyBuilder strings.Builder
+	bodyBuilder.WriteString("### Devcontainer Startup Failure Report\n\n")
+	bodyBuilder.WriteString(fmt.Sprintf("* **Target Repository:** %s/%s\n", targetOwner, targetRepo))
+	bodyBuilder.WriteString(fmt.Sprintf("* **Branch:** `%s`\n", branch))
+	bodyBuilder.WriteString(fmt.Sprintf("* **Original Issue:** #%d\n\n", originalIssueNum))
+	bodyBuilder.WriteString("#### Startup Log / Error Message\n")
+	bodyBuilder.WriteString("```\n")
+	if startupErr != nil {
+		bodyBuilder.WriteString(fmt.Sprintf("Error: %v\n", startupErr))
+	}
+	if outputLog != "" {
+		bodyBuilder.WriteString(outputLog)
+		bodyBuilder.WriteString("\n")
+	}
+	bodyBuilder.WriteString("```\n")
+
+	bodyStr := bodyBuilder.String()
+
+	req := &github.IssueRequest{
+		Title:  github.String("Issue Container Startup Failed"),
+		Body:   github.String(bodyStr),
+		Labels: &[]string{"seraphine-bug"},
+	}
+
+	_, _, err = client.Issues.Create(ctx, destOwner, destRepo, req)
+	if err != nil {
+		return fmt.Errorf("failed to create issue: %w", err)
+	}
+
+	return nil
+}
+
 func logWithPrefix(repo string, format string, args ...interface{}) {
 	prefix := fmt.Sprintf("[%s] ", repo)
 	log.Printf(prefix+format, args...)

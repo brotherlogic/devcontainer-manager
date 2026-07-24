@@ -2151,3 +2151,221 @@ func TestRun_ProcessManualUpRequestsInDcmReceivedState(t *testing.T) {
 	}
 }
 
+func TestCreateIssueWithDeduplication(t *testing.T) {
+	t.Run("NormalRepo_Success", func(t *testing.T) {
+		mux := http.NewServeMux()
+		server := httptest.NewServer(mux)
+		defer server.Close()
+
+		client := github.NewClient(nil)
+		u, _ := url.Parse(server.URL + "/")
+		client.BaseURL = u
+		client.UploadURL = u
+
+		var createCalled bool
+		var createdBody string
+		var createdLabels []string
+
+		mux.HandleFunc("/repos/dest-owner/dest-repo/issues", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodPost {
+				createCalled = true
+				var req struct {
+					Title  string   `json:"title"`
+					Body   string   `json:"body"`
+					Labels []string `json:"labels"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+					createdBody = req.Body
+					createdLabels = req.Labels
+				}
+				w.WriteHeader(http.StatusCreated)
+				fmt.Fprint(w, `{"number": 101}`)
+				return
+			}
+		})
+
+		// Mock listOpenIssuesProvider
+		originalListProvider := listOpenIssuesProvider
+		defer func() { listOpenIssuesProvider = originalListProvider }()
+		listOpenIssuesProvider = func(ctx context.Context, cl *github.Client, owner, repo string) ([]*github.Issue, error) {
+			return []*github.Issue{}, nil
+		}
+
+		err := createIssueWithDeduplication(context.Background(), client, "dest-owner", "dest-repo", "target-owner", "target-repo", "my-branch", 123, fmt.Errorf("some error"), "my log")
+		if err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+		if !createCalled {
+			t.Error("expected issue creation to be called")
+		}
+		if !strings.Contains(createdBody, "some error") {
+			t.Errorf("expected body to contain error message, got: %s", createdBody)
+		}
+		if !strings.Contains(createdBody, "**Branch:** `my-branch`") {
+			t.Errorf("expected branch info, got: %s", createdBody)
+		}
+		if !strings.Contains(createdBody, "**Original Issue:** #123") {
+			t.Errorf("expected original issue, got: %s", createdBody)
+		}
+		if len(createdLabels) != 1 || createdLabels[0] != "seraphine-bug" {
+			t.Errorf("expected label seraphine-bug, got %v", createdLabels)
+		}
+	})
+
+	t.Run("NormalRepo_Duplicate", func(t *testing.T) {
+		client := github.NewClient(nil)
+
+		// Mock listOpenIssuesProvider to return a duplicate issue
+		originalListProvider := listOpenIssuesProvider
+		defer func() { listOpenIssuesProvider = originalListProvider }()
+		listOpenIssuesProvider = func(ctx context.Context, cl *github.Client, owner, repo string) ([]*github.Issue, error) {
+			title := "Issue Container Startup Failed"
+			num := 99
+			return []*github.Issue{
+				{
+					Number: &num,
+					Title:  &title,
+				},
+			}, nil
+		}
+
+		err := createIssueWithDeduplication(context.Background(), client, "dest-owner", "dest-repo", "target-owner", "target-repo", "my-branch", 123, fmt.Errorf("some error"), "my log")
+		if err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("FallbackRepo_Success", func(t *testing.T) {
+		mux := http.NewServeMux()
+		server := httptest.NewServer(mux)
+		defer server.Close()
+
+		client := github.NewClient(nil)
+		u, _ := url.Parse(server.URL + "/")
+		client.BaseURL = u
+		client.UploadURL = u
+
+		var createCalled bool
+		mux.HandleFunc("/repos/dest-owner/devcontainer-manager/issues", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodPost {
+				createCalled = true
+				w.WriteHeader(http.StatusCreated)
+				fmt.Fprint(w, `{"number": 102}`)
+				return
+			}
+		})
+
+		// Mock listOpenIssuesProvider to return an issue with title matching but NO target repo reference in body
+		originalListProvider := listOpenIssuesProvider
+		defer func() { listOpenIssuesProvider = originalListProvider }()
+		listOpenIssuesProvider = func(ctx context.Context, cl *github.Client, owner, repo string) ([]*github.Issue, error) {
+			title := "Issue Container Startup Failed"
+			body := "Some other description without the target repo reference"
+			num := 99
+			return []*github.Issue{
+				{
+					Number: &num,
+					Title:  &title,
+					Body:   &body,
+				},
+			}, nil
+		}
+
+		err := createIssueWithDeduplication(context.Background(), client, "dest-owner", "devcontainer-manager", "target-owner", "target-repo", "my-branch", 123, fmt.Errorf("some error"), "my log")
+		if err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+		if !createCalled {
+			t.Error("expected new issue to be created in devcontainer-manager since target repo didn't match")
+		}
+	})
+
+	t.Run("FallbackRepo_Duplicate", func(t *testing.T) {
+		client := github.NewClient(nil)
+
+		// Mock listOpenIssuesProvider to return an issue with title matching AND target repo reference in body
+		originalListProvider := listOpenIssuesProvider
+		defer func() { listOpenIssuesProvider = originalListProvider }()
+		listOpenIssuesProvider = func(ctx context.Context, cl *github.Client, owner, repo string) ([]*github.Issue, error) {
+			title := "Issue Container Startup Failed"
+			body := "Stuff...\n**Target Repository:** target-owner/target-repo\nMore stuff..."
+			num := 99
+			return []*github.Issue{
+				{
+					Number: &num,
+					Title:  &title,
+					Body:   &body,
+				},
+			}, nil
+		}
+
+		err := createIssueWithDeduplication(context.Background(), client, "dest-owner", "devcontainer-manager", "target-owner", "target-repo", "my-branch", 123, fmt.Errorf("some error"), "my log")
+		if err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("Truncation", func(t *testing.T) {
+		mux := http.NewServeMux()
+		server := httptest.NewServer(mux)
+		defer server.Close()
+
+		client := github.NewClient(nil)
+		u, _ := url.Parse(server.URL + "/")
+		client.BaseURL = u
+		client.UploadURL = u
+
+		var createdBody string
+
+		mux.HandleFunc("/repos/dest-owner/dest-repo/issues", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodPost {
+				var req struct {
+					Body string `json:"body"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+					createdBody = req.Body
+				}
+				w.WriteHeader(http.StatusCreated)
+				fmt.Fprint(w, `{"number": 103}`)
+				return
+			}
+		})
+
+		originalListProvider := listOpenIssuesProvider
+		defer func() { listOpenIssuesProvider = originalListProvider }()
+		listOpenIssuesProvider = func(ctx context.Context, cl *github.Client, owner, repo string) ([]*github.Issue, error) {
+			return []*github.Issue{}, nil
+		}
+
+		// Create a log that is 70,000 characters long
+		longLog := strings.Repeat("A", 70000)
+		err := createIssueWithDeduplication(context.Background(), client, "dest-owner", "dest-repo", "target-owner", "target-repo", "my-branch", 123, fmt.Errorf("some error"), longLog)
+		if err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+
+		parts := strings.Split(createdBody, "```\n")
+		if len(parts) < 2 {
+			t.Fatalf("could not locate code block in created body: %s", createdBody)
+		}
+		codeBlock := parts[1]
+		if !strings.Contains(codeBlock, "[logs truncated due to size limit] ...\n") {
+			t.Errorf("expected code block to contain truncation message, got: %s", codeBlock)
+		}
+
+		logPart := strings.TrimPrefix(codeBlock, "Error: some error\n")
+		logPart = strings.TrimSuffix(logPart, "\n")
+		if len(logPart) != 65000 {
+			t.Errorf("expected truncated log content to be exactly 65000 characters, got %d", len(logPart))
+		}
+		expectedPrefix := "[logs truncated due to size limit] ...\n" + strings.Repeat("A", 65000-len("[logs truncated due to size limit] ...\n"))
+		if logPart != expectedPrefix {
+			t.Errorf("truncated log content does not match expected prefix/format")
+		}
+	})
+}
+
+
