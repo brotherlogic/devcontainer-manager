@@ -589,7 +589,6 @@ func run(ctx context.Context, cfg *config) error {
 								// Use --recreate to ensure we pull the freshest version of the container from head, avoiding stale caches.
 								out, err := runCommandWithLog(repo, devpodExe, "up", repoURL, "--id", containerID, "--ide", "none", "--recreate")
 								if err != nil {
-									// No-op change to trigger CI for issue 289
 									logWithPrefix(repo, "Failed to launch devcontainer for issue %d: %v (output: %s)", issueNumber, err, string(out))
 									container.State = proto.State_DCM_FAILED
 									container.ErrorMessage = err.Error()
