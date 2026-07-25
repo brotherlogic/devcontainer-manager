@@ -2368,6 +2368,9 @@ func TestCreateIssueWithDeduplication(t *testing.T) {
 	})
 }
 
+// TestReportStartupFailure_Fallback verifies that when reportStartupFailure fails to write to the
+// target repository (e.g. due to a 403 Forbidden permission error), it correctly falls back
+// to writing the startup failure issue to the devcontainer-manager repository.
 func TestReportStartupFailure_Fallback(t *testing.T) {
 	mux := http.NewServeMux()
 	server := httptest.NewServer(mux)
