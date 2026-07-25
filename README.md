@@ -153,4 +153,13 @@ The repository includes pre-configured automation workflows under `.github/workf
 ## 🔗 Project Workflows & Contributions
 For details on the issue lifecycle, label transitions, and the AI-driven development workflows utilized in this project, refer to the [Issues Workflow Guide (issues.md)](file:///workspaces/devcontainer-manager/issues.md).
 
-- Log truncation for long startup failure logs
+## 🧪 Testing
+Run the unit test suite using the standard Go test command:
+```bash
+go test -v ./...
+```
+The test suite includes extensive mocking of GitHub API responses to verify:
+* Successful issue creation on target repositories.
+* Fallback write paths when lacking write permissions on target repositories.
+* Deduplication of startup failure issues.
+* Text truncation for log files exceeding GitHub's body length limits.
