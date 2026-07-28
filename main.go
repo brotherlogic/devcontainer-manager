@@ -216,6 +216,9 @@ func initCache() *server.Cache {
 // (e.g. SSH URLs, HTTP URLs, owner/repo strings, or branch-suffixed URLs).
 func parseOwnerRepo(repoStr string) (string, string, error) {
 	s := repoStr
+	if idx := strings.Index(s, "/issues/"); idx != -1 {
+		s = s[:idx]
+	}
 	s = strings.TrimPrefix(s, "git@")
 	s = strings.TrimSuffix(s, ".git")
 	if idx := strings.Index(s, "@"); idx != -1 {
@@ -898,18 +901,14 @@ func run(ctx context.Context, cfg *config) error {
 
 		for _, w := range workspaces {
 			cName := w.ID
-			cSource := w.Source.GitRepository
 			if cName != "" {
-				// Check (b): Uses HTTP source
-				u, errURL := url.Parse(cSource)
-				isHTTPSource := errURL == nil && (u.Scheme == "http" || u.Scheme == "https")
+				// Check if container is valid (in project list, active issue list, or in gRPC cache)
+				_, inCache := globalCache.Get(cName)
+				inList := validProjectNames[cName] || validIssueContainers[cName] || inCache
 
-				// Check (a): Not in the container list (accounting for issues)
-				inList := validProjectNames[cName] || validIssueContainers[cName]
-
-				if !inList || isHTTPSource {
+				if !inList {
 					cRepo := getRepoForID(cName, projectRepoMap)
-					logWithPrefix(cRepo, "Cleaning up container %s (inList: %v, isHTTPSource: %v)", cName, inList, isHTTPSource)
+					logWithPrefix(cRepo, "Cleaning up container %s (inList: %v)", cName, inList)
 					errStop := stopContainer(cRepo, cName)
 					if errStop != nil {
 						logWithPrefix(cRepo, "Warning: failed to stop container %s during extra cleanup: %v", cName, errStop)

@@ -174,9 +174,11 @@ func RunProber(ctx context.Context, cfg ProberConfig, ghClient githubClient, man
 	// 1. Create a temporary GitHub issue in the target repo
 	title := fmt.Sprintf("[test] %s", newUUID())
 	body := "Temporary issue created by integration test prober."
+	labels := []string{"seraphine"}
 	issueReq := &github.IssueRequest{
-		Title: &title,
-		Body:  &body,
+		Title:  &title,
+		Body:   &body,
+		Labels: &labels,
 	}
 
 	issue, err := ghClient.CreateIssue(ctx, owner, repoName, issueReq)

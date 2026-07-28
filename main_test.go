@@ -2548,6 +2548,7 @@ func TestParseOwnerRepo(t *testing.T) {
 	}{
 		{"git@github.com:brotherlogic/devcontainer-manager.git", "brotherlogic", "devcontainer-manager", false},
 		{"https://github.com/brotherlogic/devcontainer-manager", "brotherlogic", "devcontainer-manager", false},
+		{"https://github.com/brotherlogic/devcontainer-manager/issues/301", "brotherlogic", "devcontainer-manager", false},
 		{"brotherlogic/devcontainer-manager", "brotherlogic", "devcontainer-manager", false},
 		{"git@github.com:brotherlogic/devcontainer-manager@feature/mybranch", "brotherlogic", "devcontainer-manager", false},
 		{"invalidrepo", "", "", true},
