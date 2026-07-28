@@ -2539,6 +2539,131 @@ func TestProcessManualUpRequest_FailureTriggersReportStartupFailure(t *testing.T
 	}
 }
 
+func TestParseOwnerRepo(t *testing.T) {
+	tests := []struct {
+		input         string
+		expectedOwner string
+		expectedRepo  string
+		expectErr     bool
+	}{
+		{"git@github.com:brotherlogic/devcontainer-manager.git", "brotherlogic", "devcontainer-manager", false},
+		{"https://github.com/brotherlogic/devcontainer-manager", "brotherlogic", "devcontainer-manager", false},
+		{"brotherlogic/devcontainer-manager", "brotherlogic", "devcontainer-manager", false},
+		{"git@github.com:brotherlogic/devcontainer-manager@feature/mybranch", "brotherlogic", "devcontainer-manager", false},
+		{"invalidrepo", "", "", true},
+	}
+
+	for _, tc := range tests {
+		owner, repo, err := parseOwnerRepo(tc.input)
+		if tc.expectErr {
+			if err == nil {
+				t.Errorf("expected error for input %q, got nil", tc.input)
+			}
+		} else {
+			if err != nil {
+				t.Errorf("unexpected error for input %q: %v", tc.input, err)
+			}
+			if owner != tc.expectedOwner || repo != tc.expectedRepo {
+				t.Errorf("parseOwnerRepo(%q) = (%q, %q), expected (%q, %q)", tc.input, owner, repo, tc.expectedOwner, tc.expectedRepo)
+			}
+		}
+	}
+}
+
+func TestGHGitClient(t *testing.T) {
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+
+	// Mock branch endpoint
+	mux.HandleFunc("/repos/test-owner/test-repo/branches/existing-branch", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"name": "existing-branch"}`)
+	})
+
+	// Mock get repo endpoint
+	mux.HandleFunc("/repos/test-owner/test-repo", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"default_branch": "main"}`)
+	})
+
+	// Mock git ref endpoint for main branch
+	mux.HandleFunc("/repos/test-owner/test-repo/git/ref/heads/main", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"ref": "refs/heads/main", "object": {"sha": "sha123"}}`)
+	})
+
+	// Mock git ref endpoint for new branch check
+	mux.HandleFunc("/repos/test-owner/test-repo/git/ref/heads/new-branch", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	// Mock git refs POST for branch creation
+	mux.HandleFunc("/repos/test-owner/test-repo/git/refs", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"ref": "refs/heads/new-branch", "object": {"sha": "sha123"}}`)
+	})
+
+	ghClient := &ghGitClient{}
+
+	// Test BranchExists
+	exists, err := ghClient.BranchExists(context.Background(), "test-owner/test-repo", "existing-branch")
+	if err != nil || !exists {
+		t.Errorf("expected branch to exist, got exists=%v, err=%v", exists, err)
+	}
+
+	nonExists, err := ghClient.BranchExists(context.Background(), "test-owner/test-repo", "non-existing-branch")
+	if err != nil || nonExists {
+		t.Errorf("expected branch to not exist, got exists=%v, err=%v", nonExists, err)
+	}
+
+	// Test GetDefaultBranch
+	defaultBranch, err := ghClient.GetDefaultBranch(context.Background(), "test-owner/test-repo")
+	if err != nil || defaultBranch != "main" {
+		t.Errorf("expected default branch 'main', got %q, err=%v", defaultBranch, err)
+	}
+
+	// Test CreateBranch
+	err = ghClient.CreateBranch(context.Background(), "test-owner/test-repo", "new-branch", "main")
+	if err != nil {
+		t.Errorf("unexpected error creating branch: %v", err)
+	}
+}
+
+func TestTriggerRunLoop(t *testing.T) {
+	// Clear channel
+	select {
+	case <-triggerRunChan:
+	default:
+	}
+
+	triggerRunLoop()
+
+	select {
+	case <-triggerRunChan:
+		// Success
+	default:
+		t.Error("expected triggerRunChan to receive a signal")
+	}
+}
+
+
 
 
 

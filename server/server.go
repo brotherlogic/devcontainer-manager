@@ -87,6 +87,7 @@ type Server struct {
 	modelsMu        sync.RWMutex
 	supportedModels map[string]bool
 	commandRunner   CommandRunner
+	onUpReceived    func()
 }
 
 // NewServer creates and initializes a new gRPC server implementation.
@@ -102,6 +103,11 @@ func NewServer(cache *Cache, gitClient GitClient) *Server {
 		supportedModels: make(map[string]bool),
 		commandRunner:   defaultCommandRunner,
 	}
+}
+
+// SetOnUpReceived sets a callback function to be executed whenever an Up request is successfully processed.
+func (s *Server) SetOnUpReceived(fn func()) {
+	s.onUpReceived = fn
 }
 
 // SetCommandRunner overrides the command runner for testing purposes.
@@ -297,6 +303,9 @@ func (s *Server) Up(ctx context.Context, req *proto.UpRequest) (*proto.UpRespons
 		State:   proto.State_DCM_RECEIVED,
 	}
 	s.cache.Update(config.Id, config)
+	if s.onUpReceived != nil {
+		s.onUpReceived()
+	}
 	return &proto.UpResponse{
 		Config: config,
 	}, nil
