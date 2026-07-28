@@ -212,6 +212,8 @@ func initCache() *server.Cache {
 	return globalCache
 }
 
+// parseOwnerRepo extracts the repository owner and name from various Git URL formats
+// (e.g. SSH URLs, HTTP URLs, owner/repo strings, or branch-suffixed URLs).
 func parseOwnerRepo(repoStr string) (string, string, error) {
 	s := repoStr
 	s = strings.TrimPrefix(s, "git@")
