@@ -212,13 +212,91 @@ func initCache() *server.Cache {
 	return globalCache
 }
 
+func parseOwnerRepo(repoStr string) (string, string, error) {
+	s := repoStr
+	s = strings.TrimPrefix(s, "git@")
+	s = strings.TrimSuffix(s, ".git")
+	if idx := strings.Index(s, "@"); idx != -1 {
+		s = s[:idx]
+	}
+	if idx := strings.Index(s, ":"); idx != -1 {
+		s = s[idx+1:]
+	}
+	if u, err := url.Parse(s); err == nil && u.Path != "" {
+		s = u.Path
+	}
+	s = strings.TrimPrefix(s, "/")
+	parts := strings.Split(s, "/")
+	if len(parts) >= 2 {
+		return parts[len(parts)-2], parts[len(parts)-1], nil
+	}
+	return "", "", fmt.Errorf("invalid repo string: %s", repoStr)
+}
+
+type ghGitClient struct{}
+
+func (g *ghGitClient) BranchExists(ctx context.Context, repo, branch string) (bool, error) {
+	owner, repoName, err := parseOwnerRepo(repo)
+	if err != nil {
+		return false, err
+	}
+	client, err := gitHubClientProvider()
+	if err != nil {
+		return false, err
+	}
+	_, _, err = client.Repositories.GetBranch(ctx, owner, repoName, branch, false)
+	if err == nil {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (g *ghGitClient) CreateBranch(ctx context.Context, repo, newBranch, baseBranch string) error {
+	owner, repoName, err := parseOwnerRepo(repo)
+	if err != nil {
+		return err
+	}
+	client, err := gitHubClientProvider()
+	if err != nil {
+		return err
+	}
+	return ensureIssueBranchExists(ctx, client, owner, repoName, newBranch)
+}
+
+func (g *ghGitClient) GetDefaultBranch(ctx context.Context, repo string) (string, error) {
+	owner, repoName, err := parseOwnerRepo(repo)
+	if err != nil {
+		return "main", err
+	}
+	client, err := gitHubClientProvider()
+	if err != nil {
+		return "main", err
+	}
+	r, _, err := client.Repositories.Get(ctx, owner, repoName)
+	if err != nil {
+		return "main", err
+	}
+	return r.GetDefaultBranch(), nil
+}
+
+var triggerRunChan = make(chan struct{}, 1)
+
+func triggerRunLoop() {
+	select {
+	case triggerRunChan <- struct{}{}:
+	default:
+	}
+}
+
 func startGRPCServer(port int, cache *server.Cache) (*grpc.Server, error) {
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen: %w", err)
 	}
 	s := grpc.NewServer()
-	proto.RegisterManagerServiceServer(s, server.NewServer(cache, nil))
+	srv := server.NewServer(cache, &ghGitClient{})
+	srv.SetOnUpReceived(triggerRunLoop)
+	proto.RegisterManagerServiceServer(s, srv)
 	go func() {
 		if err := s.Serve(lis); err != nil {
 			log.Printf("gRPC server stopped: %v", err)
@@ -347,7 +425,10 @@ func main() {
 			break
 		}
 
-		time.Sleep(time.Minute * 5)
+		select {
+		case <-triggerRunChan:
+		case <-time.After(time.Minute * 5):
+		}
 	}
 }
 
