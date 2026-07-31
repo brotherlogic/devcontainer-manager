@@ -2637,6 +2637,55 @@ func TestProcessManualUpRequest_AdjustsIssueLabels(t *testing.T) {
 	}
 }
 
+func TestProcessManualUpRequest_InjectsPrompt(t *testing.T) {
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var executedCommands []string
+	var mu sync.Mutex
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		mu.Lock()
+		cmdStr := name + " " + strings.Join(args, " ")
+		executedCommands = append(executedCommands, cmdStr)
+		mu.Unlock()
+		return []byte("success"), nil
+	}
+
+	manualConfigID := "test-repo-manual-prompt"
+	manualConfig := &proto.DevcontainerConfig{
+		Id: manualConfigID,
+		Request: &proto.UpRequest{
+			Repo:   "https://github.com/test-owner/test-repo",
+			Prompt: "Custom test prompt",
+		},
+		State: proto.State_DCM_RECEIVED,
+	}
+	globalCache.Update(manualConfigID, manualConfig)
+	defer globalCache.Delete(manualConfigID)
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+	wg.Add(1)
+
+	processManualUpRequest(context.Background(), manualConfig, &wg, &config{}, sem)
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	foundPrompt := false
+	for _, cmd := range executedCommands {
+		if strings.Contains(cmd, "Custom test prompt") {
+			foundPrompt = true
+			break
+		}
+	}
+	if !foundPrompt {
+		t.Errorf("expected commandRunner to execute command containing prompt 'Custom test prompt', got: %v", executedCommands)
+	}
+}
+
 func TestParseOwnerRepo(t *testing.T) {
 	tests := []struct {
 		input         string

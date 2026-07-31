@@ -1010,6 +1010,16 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 		renameDockerContainer(config.Id)
 
 		cmdToInject := cfg.startupCommand
+		if req.GetPrompt() != "" {
+			cmdToInject = fmt.Sprintf("agy --dangerously-skip-permissions --prompt-interactive %s", shellQuote(req.GetPrompt()))
+		} else if cmdToInject == "" {
+			if issueNum > 0 {
+				cmdToInject = fmt.Sprintf(`agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of issue #%d - if the label matches any of the workflows in the brotherlogic/seraphine project's .agent/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`, issueNum)
+			} else {
+				cmdToInject = defaultIssueStartupCommand
+			}
+		}
+
 		if cmdToInject != "" {
 			wg.Add(1)
 			go func(cid string) {
