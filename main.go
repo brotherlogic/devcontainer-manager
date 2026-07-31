@@ -980,6 +980,15 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 	// Execute container provisioning logic
 	logWithPrefix(config.Id, "Manually launching container %s on repo %s", config.Id, repoURL)
 	out, err := runCommandWithLog(config.Id, devpodExe, "up", repoURL, "--id", config.Id, "--ide", "none")
+
+	if client != nil && owner != "" && repoName != "" && issueNum > 0 {
+		if err != nil {
+			adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-failed", []string{"container-creating", "container-ready"})
+		} else {
+			adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-ready", []string{"container-creating", "container-failed"})
+		}
+	}
+
 	if err != nil {
 		logWithPrefix(config.Id, "Failed to manually launch devcontainer: %v (output: %s)", err, string(out))
 		config.State = proto.State_DCM_FAILED
@@ -992,18 +1001,11 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 		}
 
 		if client != nil && owner != "" && repoName != "" {
-			if issueNum > 0 {
-				adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-failed", []string{"container-creating", "container-ready"})
-			}
 			go reportStartupFailure(ctx, client, owner, repoName, req.GetBranch(), issueNum, err, string(out))
 		}
 	} else {
 		config.State = proto.State_DCM_READY
 		globalCache.Update(config.Id, config)
-
-		if client != nil && owner != "" && repoName != "" && issueNum > 0 {
-			adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-ready", []string{"container-creating", "container-failed"})
-		}
 
 		renameDockerContainer(config.Id)
 
