@@ -20,11 +20,11 @@ import (
 )
 
 type ProberConfig struct {
-	Server    string
-	Repo      string
-	Prompt1   string
-	Prompt2   string
-	Timeout   time.Duration
+	Server  string
+	Repo    string
+	Prompt1 string // Initial prompt passed in UpRequest
+	Prompt2 string // Secondary prompt sent via PushPrompt
+	Timeout time.Duration
 }
 
 type githubClient interface {
@@ -211,6 +211,7 @@ func RunProber(ctx context.Context, cfg ProberConfig, ghClient githubClient, man
 		Repo:       issueURL,
 		Branch:     branchName,
 		Identifier: &proto.Identifier{Id: &proto.Identifier_IssueNumber{IssueNumber: issueNum}},
+		Prompt:     cfg.Prompt1,
 	})
 	if err != nil {
 		return fmt.Errorf("failed calling Up: %w", err)

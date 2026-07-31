@@ -146,6 +146,9 @@ func TestRunProber_Success(t *testing.T) {
 			if in.GetIdentifier().GetIssueNumber() != issueNum {
 				t.Errorf("expected issue number %d, got %d", issueNum, in.GetIdentifier().GetIssueNumber())
 			}
+			if in.GetPrompt() != cfg.Prompt1 {
+				t.Errorf("expected prompt %s, got %s", cfg.Prompt1, in.GetPrompt())
+			}
 			upCalled = true
 			return &proto.UpResponse{
 				Config: &proto.DevcontainerConfig{
@@ -246,6 +249,9 @@ func TestRunProber_FailureCleanup(t *testing.T) {
 
 	mgrMock := &mockManagerServiceClient{
 		upFunc: func(ctx context.Context, in *proto.UpRequest) (*proto.UpResponse, error) {
+			if in.GetPrompt() != cfg.Prompt1 {
+				t.Errorf("expected prompt %s, got %s", cfg.Prompt1, in.GetPrompt())
+			}
 			return &proto.UpResponse{
 				Config: &proto.DevcontainerConfig{
 					Id: "brotherlogic-devcontainer-manager-456",
