@@ -190,6 +190,7 @@ var (
 
 // We live dangerously
 const (
+	agyInteractivePrefix       = "agy --dangerously-skip-permissions --prompt-interactive"
 	defaultIssueStartupCommand = `agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of this issue - if the label matches any of the workflows in the brotherlogic/seraphine project's .agent/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`
 	defaultBranchRef           = ""
 	DevpodLabelPrefix          = "sh.loft.devpod.workspace.id="
@@ -1011,10 +1012,10 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 
 		cmdToInject := cfg.startupCommand
 		if req.GetPrompt() != "" {
-			cmdToInject = fmt.Sprintf("agy --dangerously-skip-permissions --prompt-interactive %s", shellQuote(req.GetPrompt()))
+			cmdToInject = fmt.Sprintf("%s %s", agyInteractivePrefix, shellQuote(req.GetPrompt()))
 		} else if cmdToInject == "" {
 			if issueNum > 0 {
-				cmdToInject = fmt.Sprintf(`agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of issue #%d - if the label matches any of the workflows in the brotherlogic/seraphine project's .agent/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`, issueNum)
+				cmdToInject = fmt.Sprintf(`%s "Take a look at the status of issue #%d - if the label matches any of the workflows in the brotherlogic/seraphine project's .agent/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`, agyInteractivePrefix, issueNum)
 			} else {
 				cmdToInject = defaultIssueStartupCommand
 			}
