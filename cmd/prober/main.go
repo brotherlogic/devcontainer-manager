@@ -211,6 +211,7 @@ func RunProber(ctx context.Context, cfg ProberConfig, ghClient githubClient, man
 		Repo:       issueURL,
 		Branch:     branchName,
 		Identifier: &proto.Identifier{Id: &proto.Identifier_IssueNumber{IssueNumber: issueNum}},
+		Prompt:     cfg.Prompt1,
 	})
 	if err != nil {
 		return fmt.Errorf("failed calling Up: %w", err)
