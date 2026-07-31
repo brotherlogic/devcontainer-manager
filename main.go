@@ -966,9 +966,29 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 		repoURL = fmt.Sprintf("%s@%s", repoURL, req.GetBranch())
 	}
 
+	owner, repoName, _ := parseOwnerRepo(req.GetRepo())
+	var issueNum int
+	if req.GetIdentifier() != nil && req.GetIdentifier().GetIssueNumber() > 0 {
+		issueNum = int(req.GetIdentifier().GetIssueNumber())
+	}
+	client, _ := gitHubClientProvider()
+
+	if client != nil && owner != "" && repoName != "" && issueNum > 0 {
+		adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-creating", []string{"container-ready", "container-failed"})
+	}
+
 	// Execute container provisioning logic
 	logWithPrefix(config.Id, "Manually launching container %s on repo %s", config.Id, repoURL)
 	out, err := runCommandWithLog(config.Id, devpodExe, "up", repoURL, "--id", config.Id, "--ide", "none")
+
+	if client != nil && owner != "" && repoName != "" && issueNum > 0 {
+		if err != nil {
+			adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-failed", []string{"container-creating", "container-ready"})
+		} else {
+			adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-ready", []string{"container-creating", "container-failed"})
+		}
+	}
+
 	if err != nil {
 		logWithPrefix(config.Id, "Failed to manually launch devcontainer: %v (output: %s)", err, string(out))
 		config.State = proto.State_DCM_FAILED
@@ -980,35 +1000,8 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 			logWithPrefix(config.Id, "Warning: failed to delete failed devcontainer %s: %v", config.Id, delErr)
 		}
 
-		// Trigger startup failure reporting if the manual container creation fails.
-		client, _ := gitHubClientProvider()
-		if client != nil {
-			owner, repoName := "", ""
-			cleanRepo := req.GetRepo()
-			if idx := strings.Index(cleanRepo, "/issues/"); idx != -1 {
-				cleanRepo = cleanRepo[:idx]
-			}
-			cleanRepo = strings.TrimPrefix(cleanRepo, "https://github.com/")
-			cleanRepo = strings.TrimPrefix(cleanRepo, "http://github.com/")
-			if idx := strings.Index(cleanRepo, "github.com:"); idx != -1 {
-				cleanRepo = cleanRepo[idx+len("github.com:"):]
-			} else if idx := strings.Index(cleanRepo, "@"); idx != -1 {
-				cleanRepo = cleanRepo[idx+1:]
-			}
-			cleanRepo = strings.TrimSuffix(cleanRepo, ".git")
-			parts := strings.Split(cleanRepo, "/")
-			if len(parts) >= 2 {
-				owner = parts[0]
-				repoName = parts[1]
-			}
-
-			if owner != "" && repoName != "" {
-				var issueNum int32
-				if req.GetIdentifier() != nil {
-					issueNum = req.GetIdentifier().GetIssueNumber()
-				}
-				go reportStartupFailure(ctx, client, owner, repoName, req.GetBranch(), int(issueNum), err, string(out))
-			}
+		if client != nil && owner != "" && repoName != "" {
+			go reportStartupFailure(ctx, client, owner, repoName, req.GetBranch(), issueNum, err, string(out))
 		}
 	} else {
 		config.State = proto.State_DCM_READY
