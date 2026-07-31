@@ -20,11 +20,11 @@ import (
 )
 
 type ProberConfig struct {
-	Server    string
-	Repo      string
-	Prompt1   string
-	Prompt2   string
-	Timeout   time.Duration
+	Server  string
+	Repo    string
+	Prompt1 string // Initial prompt passed in UpRequest
+	Prompt2 string // Secondary prompt sent via PushPrompt
+	Timeout time.Duration
 }
 
 type githubClient interface {
