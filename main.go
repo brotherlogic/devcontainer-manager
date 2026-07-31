@@ -228,6 +228,12 @@ func parseOwnerRepo(repoStr string) (string, string, error) {
 		s = u.Path
 	}
 	s = strings.TrimPrefix(s, "/")
+	if idx := strings.Index(s, "/issues/"); idx != -1 {
+		s = s[:idx]
+	}
+	if idx := strings.Index(s, "/pull/"); idx != -1 {
+		s = s[:idx]
+	}
 	parts := strings.Split(s, "/")
 	if len(parts) >= 2 {
 		return parts[len(parts)-2], parts[len(parts)-1], nil
