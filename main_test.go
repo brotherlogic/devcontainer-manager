@@ -2539,6 +2539,104 @@ func TestProcessManualUpRequest_FailureTriggersReportStartupFailure(t *testing.T
 	}
 }
 
+func TestProcessManualUpRequest_AdjustsIssueLabels(t *testing.T) {
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		return []byte("success"), nil
+	}
+
+	var addedLabels []string
+	var removedLabels []string
+	var mu sync.Mutex
+
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/123", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"number": 123, "labels": [{"name": "seraphine-bug"}]}`)
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/123/labels", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost {
+			var labels []string
+			json.NewDecoder(r.Body).Decode(&labels)
+			mu.Lock()
+			addedLabels = append(addedLabels, labels...)
+			mu.Unlock()
+			fmt.Fprint(w, `[]`)
+			return
+		}
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/123/labels/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodDelete {
+			parts := strings.Split(r.URL.Path, "/")
+			label := parts[len(parts)-1]
+			mu.Lock()
+			removedLabels = append(removedLabels, label)
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+	})
+
+	manualConfigID := "test-repo-manual-success"
+	manualConfig := &proto.DevcontainerConfig{
+		Id: manualConfigID,
+		Request: &proto.UpRequest{
+			Repo:   "https://github.com/test-owner/test-repo/issues/123",
+			Branch: "my-manual-branch",
+			Identifier: &proto.Identifier{
+				Id: &proto.Identifier_IssueNumber{IssueNumber: 123},
+			},
+		},
+		State: proto.State_DCM_RECEIVED,
+	}
+	globalCache.Update(manualConfigID, manualConfig)
+	defer globalCache.Delete(manualConfigID)
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+	wg.Add(1)
+
+	processManualUpRequest(context.Background(), manualConfig, &wg, &config{}, sem)
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	hasCreating := false
+	hasReady := false
+	for _, l := range addedLabels {
+		if l == "container-creating" {
+			hasCreating = true
+		}
+		if l == "container-ready" {
+			hasReady = true
+		}
+	}
+	if !hasCreating {
+		t.Errorf("expected container-creating label to be added, got addedLabels: %v", addedLabels)
+	}
+	if !hasReady {
+		t.Errorf("expected container-ready label to be added, got addedLabels: %v", addedLabels)
+	}
+}
+
 func TestParseOwnerRepo(t *testing.T) {
 	tests := []struct {
 		input         string
