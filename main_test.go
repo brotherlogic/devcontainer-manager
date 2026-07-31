@@ -2707,6 +2707,89 @@ func TestProcessManualUpRequest_SSHURLConversion(t *testing.T) {
 	}
 }
 
+func TestManualIssueContainerNotCleanedUpWhenOpen(t *testing.T) {
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	origClientProvider := gitHubClientProvider
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+	defer func() { gitHubClientProvider = origClientProvider }()
+
+	tmpFile, err := os.CreateTemp("", "container.list.*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	content := "test-owner/test-repo\n"
+	if _, err := tmpFile.WriteString(content); err != nil {
+		t.Fatalf("failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	origCommandRunner := commandRunner
+	defer func() { commandRunner = origCommandRunner }()
+
+	var capturedCommands [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			// devpod list returns test-repo-311 (an open manual issue container without seraphine label)
+			return []byte(`[{"id":"test-repo-311","source":{"gitRepository":"git@github.com:test-owner/test-repo@main"}}]`), nil
+		}
+		return []byte("success"), nil
+	}
+
+	// Mock GitHub API: Issue 311 is open with label container-ready (no seraphine prefix)
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/311", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"number": 311, "state": "open", "updated_at": "2026-05-31T12:00:00Z", "labels": [{"name": "container-ready"}]}`)
+	})
+
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `[]`)
+	})
+
+	manualConfigID := "test-repo-311"
+	globalCache.SetManual(manualConfigID, true)
+	defer globalCache.Delete(manualConfigID)
+
+	cfg := &config{
+		once:               true,
+		containerList:      tmpFile.Name(),
+		maxIssueContainers: 5,
+	}
+
+	err = run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify that devpod stop and devpod delete were NOT called for manual container test-repo-311
+	for _, cmd := range capturedCommands {
+		if len(cmd) >= 3 && cmd[0] == devpodExe && (cmd[1] == "stop" || cmd[1] == "delete") && cmd[2] == manualConfigID {
+			t.Errorf("expected devpod %s NOT to be called for open manual issue container %s, but it was called", cmd[1], manualConfigID)
+		}
+	}
+}
+
 
 
 

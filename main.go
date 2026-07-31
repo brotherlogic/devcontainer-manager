@@ -483,6 +483,7 @@ func run(ctx context.Context, cfg *config) error {
 
 	for _, c := range globalCache.List() {
 		if c.State == proto.State_DCM_RECEIVED {
+			globalCache.SetManual(c.Id, true)
 			// Update state to DCM_CREATING to lock it
 			c.State = proto.State_DCM_CREATING
 			globalCache.Update(c.Id, c)
@@ -848,7 +849,7 @@ func run(ctx context.Context, cfg *config) error {
 							if errGet == nil {
 								if issue.GetState() == "closed" {
 									shouldCleanup = true
-								} else {
+								} else if !globalCache.IsManual(id) {
 									hasSeraphineLabel := false
 									for _, label := range issue.Labels {
 										if strings.HasPrefix(label.GetName(), "seraphine") {
@@ -905,7 +906,7 @@ func run(ctx context.Context, cfg *config) error {
 				isHTTPSource := errURL == nil && (u.Scheme == "http" || u.Scheme == "https")
 
 				// Check (a): Not in the container list (accounting for issues)
-				inList := validProjectNames[cName] || validIssueContainers[cName]
+				inList := validProjectNames[cName] || validIssueContainers[cName] || globalCache.IsManual(cName)
 
 				if !inList || isHTTPSource {
 					cRepo := getRepoForID(cName, projectRepoMap)
