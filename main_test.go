@@ -2663,6 +2663,51 @@ func TestTriggerRunLoop(t *testing.T) {
 	}
 }
 
+func TestProcessManualUpRequest_SSHURLConversion(t *testing.T) {
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		return []byte("success"), nil
+	}
+
+	manualConfigID := "test-repo-manual-http-url"
+	manualConfig := &proto.DevcontainerConfig{
+		Id: manualConfigID,
+		Request: &proto.UpRequest{
+			Repo:   "https://github.com/brotherlogic/devcontainer-manager/issues/308",
+			Branch: "feature/test-branch",
+		},
+		State: proto.State_DCM_RECEIVED,
+	}
+	globalCache.Update(manualConfigID, manualConfig)
+	defer globalCache.Delete(manualConfigID)
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+	wg.Add(1)
+
+	processManualUpRequest(context.Background(), manualConfig, &wg, &config{}, sem)
+	wg.Wait()
+
+	expectedURL := "git@github.com:brotherlogic/devcontainer-manager@feature/test-branch"
+	var found bool
+	for _, cmd := range capturedCommands {
+		if len(cmd) > 3 && cmd[0] == devpodExe && cmd[1] == "up" {
+			if cmd[2] == expectedURL {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected devpod up command to be called with repo URL %q, captured commands: %v", expectedURL, capturedCommands)
+	}
+}
+
+
 
 
 

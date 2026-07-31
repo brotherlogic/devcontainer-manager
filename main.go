@@ -947,7 +947,12 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 	if idx := strings.Index(repoURL, "/issues/"); idx != -1 {
 		repoURL = repoURL[:idx]
 	}
-	if !strings.HasPrefix(repoURL, "git@") && !strings.HasPrefix(repoURL, "http://") && !strings.HasPrefix(repoURL, "https://") {
+	repoURL = strings.TrimPrefix(repoURL, "https://github.com/")
+	repoURL = strings.TrimPrefix(repoURL, "http://github.com/")
+	if idx := strings.Index(repoURL, "github.com:"); idx != -1 {
+		repoURL = repoURL[idx+len("github.com:"):]
+	}
+	if !strings.HasPrefix(repoURL, "git@") {
 		repoURL = fmt.Sprintf("git@github.com:%s", repoURL)
 	}
 	if req.GetBranch() != "" && !strings.HasSuffix(repoURL, "@"+req.GetBranch()) {
