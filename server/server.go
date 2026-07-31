@@ -29,12 +29,14 @@ var defaultCommandRunner CommandRunner = func(name string, args ...string) ([]by
 type Cache struct {
 	mu         sync.RWMutex
 	containers map[string]*proto.DevcontainerConfig
+	manualIDs  map[string]bool
 }
 
 // NewCache creates and initializes a new Cache.
 func NewCache() *Cache {
 	return &Cache{
 		containers: make(map[string]*proto.DevcontainerConfig),
+		manualIDs:  make(map[string]bool),
 	}
 }
 
@@ -45,11 +47,38 @@ func (c *Cache) Update(id string, container *proto.DevcontainerConfig) {
 	c.containers[id] = container
 }
 
+// SetManual marks a container ID as manually requested via API.
+func (c *Cache) SetManual(id string, manual bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.manualIDs == nil {
+		c.manualIDs = make(map[string]bool)
+	}
+	if manual {
+		c.manualIDs[id] = true
+	} else {
+		delete(c.manualIDs, id)
+	}
+}
+
+// IsManual returns true if the container was manually requested via API.
+func (c *Cache) IsManual(id string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.manualIDs == nil {
+		return false
+	}
+	return c.manualIDs[id]
+}
+
 // Delete removes a container status from the cache by its ID.
 func (c *Cache) Delete(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.containers, id)
+	if c.manualIDs != nil {
+		delete(c.manualIDs, id)
+	}
 }
 
 // List returns a slice of all container statuses stored in the cache.
@@ -303,6 +332,7 @@ func (s *Server) Up(ctx context.Context, req *proto.UpRequest) (*proto.UpRespons
 		State:   proto.State_DCM_RECEIVED,
 	}
 	s.cache.Update(config.Id, config)
+	s.cache.SetManual(config.Id, true)
 	if s.onUpReceived != nil {
 		s.onUpReceived()
 	}
