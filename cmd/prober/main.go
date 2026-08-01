@@ -85,6 +85,10 @@ func getGitHubClient() (*github.Client, error) {
 	return github.NewClient(tc), nil
 }
 
+func buildIssueCommentPrompt(issueNum int32) string {
+	return fmt.Sprintf("Please post a comment containing strictly \"hello\" to issue #%d in this repository using the gh CLI tool.", issueNum)
+}
+
 var pollInterval = 5 * time.Second
 
 func pollForComment(ctx context.Context, ghClient githubClient, owner, repo string, issueNum int, targetComment string) error {
@@ -211,7 +215,7 @@ func RunProber(ctx context.Context, cfg ProberConfig, ghClient githubClient, man
 		Repo:       issueURL,
 		Branch:     branchName,
 		Identifier: &proto.Identifier{Id: &proto.Identifier_IssueNumber{IssueNumber: issueNum}},
-		Prompt:     cfg.Prompt1,
+		Prompt:     buildIssueCommentPrompt(issueNum),
 	})
 	if err != nil {
 		return fmt.Errorf("failed calling Up: %w", err)
