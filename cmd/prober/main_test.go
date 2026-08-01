@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -301,6 +302,83 @@ func TestBuildIssueCommentPrompt(t *testing.T) {
 	want := "Please post a comment containing strictly \"hello\" to issue #123 in this repository using the gh CLI tool."
 	if got != want {
 		t.Errorf("buildIssueCommentPrompt(123) = %q; want %q", got, want)
+	}
+}
+
+func TestRunProber_UpRPCInvocation(t *testing.T) {
+	pollInterval = 10 * time.Millisecond
+	cfg := ProberConfig{
+		Server:  "localhost:50051",
+		Repo:    "brotherlogic/devcontainer-manager",
+		Prompt1: "hello",
+		Prompt2: "goodbye",
+		Timeout: 2 * time.Second,
+	}
+
+	issueNum := int32(789)
+	issueURL := "https://github.com/brotherlogic/devcontainer-manager/issues/789"
+
+	var upReq *proto.UpRequest
+
+	ghMock := &mockGitHubClient{
+		createIssueFunc: func(ctx context.Context, owner, repo string, req *github.IssueRequest) (*github.Issue, error) {
+			num := int(issueNum)
+			return &github.Issue{
+				Number:  &num,
+				HTMLURL: &issueURL,
+			}, nil
+		},
+		listCommentsFunc: func(ctx context.Context, owner, repo string, number int) ([]*github.IssueComment, error) {
+			body1 := "hello"
+			body2 := "goodbye"
+			return []*github.IssueComment{{Body: &body1}, {Body: &body2}}, nil
+		},
+	}
+
+	mgrMock := &mockManagerServiceClient{
+		upFunc: func(ctx context.Context, in *proto.UpRequest) (*proto.UpResponse, error) {
+			upReq = in
+			return &proto.UpResponse{
+				Config: &proto.DevcontainerConfig{
+					Id: "container-789",
+				},
+			}, nil
+		},
+		pushPromptFunc: func(ctx context.Context, in *proto.PushPromptRequest) (*proto.PushPromptResponse, error) {
+			return &proto.PushPromptResponse{}, nil
+		},
+		downFunc: func(ctx context.Context, in *proto.DownRequest) (*proto.DownResponse, error) {
+			return &proto.DownResponse{}, nil
+		},
+		listFunc: func(ctx context.Context, in *proto.ListRequest) (*proto.ListResponse, error) {
+			return &proto.ListResponse{}, nil
+		},
+	}
+
+	err := RunProber(context.Background(), cfg, ghMock, mgrMock)
+	if err != nil {
+		t.Fatalf("unexpected error running prober: %v", err)
+	}
+
+	if upReq == nil {
+		t.Fatal("expected Up RPC to be invoked, but it was not")
+	}
+
+	if upReq.GetRepo() != issueURL {
+		t.Errorf("expected Repo %q, got %q", issueURL, upReq.GetRepo())
+	}
+
+	if upReq.GetIdentifier().GetIssueNumber() != issueNum {
+		t.Errorf("expected IssueNumber %d, got %d", issueNum, upReq.GetIdentifier().GetIssueNumber())
+	}
+
+	expectedPrompt := buildIssueCommentPrompt(issueNum)
+	if upReq.GetPrompt() != expectedPrompt {
+		t.Errorf("expected Prompt %q, got %q", expectedPrompt, upReq.GetPrompt())
+	}
+
+	if !strings.HasPrefix(upReq.GetBranch(), "feature/test-") {
+		t.Errorf("expected Branch to have prefix 'feature/test-', got %q", upReq.GetBranch())
 	}
 }
 
