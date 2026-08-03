@@ -85,6 +85,7 @@ func getGitHubClient() (*github.Client, error) {
 	return github.NewClient(tc), nil
 }
 
+// buildIssueCommentPrompt formats a prompt instructing the agent to post a specific comment (e.g. "hello" or "goodbye") to a GitHub issue.
 func buildIssueCommentPrompt(issueNum int32, target string) string {
 	return fmt.Sprintf("Please post a comment containing strictly %q to issue #%d in this repository using the gh CLI tool.", target, issueNum)
 }
