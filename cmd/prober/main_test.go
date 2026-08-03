@@ -147,7 +147,7 @@ func TestRunProber_Success(t *testing.T) {
 			if in.GetIdentifier().GetIssueNumber() != issueNum {
 				t.Errorf("expected issue number %d, got %d", issueNum, in.GetIdentifier().GetIssueNumber())
 			}
-			expectedPrompt := buildIssueCommentPrompt(issueNum)
+			expectedPrompt := buildIssueCommentPrompt(issueNum, "hello")
 			if in.GetPrompt() != expectedPrompt {
 				t.Errorf("expected prompt %s, got %s", expectedPrompt, in.GetPrompt())
 			}
@@ -162,8 +162,9 @@ func TestRunProber_Success(t *testing.T) {
 			if in.GetId() != "brotherlogic-devcontainer-manager-456" {
 				t.Errorf("expected container id brotherlogic-devcontainer-manager-456, got %s", in.GetId())
 			}
-			if in.GetPrompt() != "goodbye" {
-				t.Errorf("expected prompt goodbye, got %s", in.GetPrompt())
+			expectedPrompt := buildIssueCommentPrompt(issueNum, "goodbye")
+			if in.GetPrompt() != expectedPrompt {
+				t.Errorf("expected prompt %s, got %s", expectedPrompt, in.GetPrompt())
 			}
 			pushCalled = true
 			return &proto.PushPromptResponse{}, nil
@@ -251,7 +252,7 @@ func TestRunProber_FailureCleanup(t *testing.T) {
 
 	mgrMock := &mockManagerServiceClient{
 		upFunc: func(ctx context.Context, in *proto.UpRequest) (*proto.UpResponse, error) {
-			expectedPrompt := buildIssueCommentPrompt(issueNum)
+			expectedPrompt := buildIssueCommentPrompt(issueNum, "hello")
 			if in.GetPrompt() != expectedPrompt {
 				t.Errorf("expected prompt %s, got %s", expectedPrompt, in.GetPrompt())
 			}
@@ -298,10 +299,16 @@ func TestRunProber_FailureCleanup(t *testing.T) {
 }
 
 func TestBuildIssueCommentPrompt(t *testing.T) {
-	got := buildIssueCommentPrompt(123)
+	got := buildIssueCommentPrompt(123, "hello")
 	want := "Please post a comment containing strictly \"hello\" to issue #123 in this repository using the gh CLI tool."
 	if got != want {
-		t.Errorf("buildIssueCommentPrompt(123) = %q; want %q", got, want)
+		t.Errorf("buildIssueCommentPrompt(123, \"hello\") = %q; want %q", got, want)
+	}
+
+	gotGoodbye := buildIssueCommentPrompt(123, "goodbye")
+	wantGoodbye := "Please post a comment containing strictly \"goodbye\" to issue #123 in this repository using the gh CLI tool."
+	if gotGoodbye != wantGoodbye {
+		t.Errorf("buildIssueCommentPrompt(123, \"goodbye\") = %q; want %q", gotGoodbye, wantGoodbye)
 	}
 }
 
@@ -372,7 +379,7 @@ func TestRunProber_UpRPCInvocation(t *testing.T) {
 		t.Errorf("expected IssueNumber %d, got %d", issueNum, upReq.GetIdentifier().GetIssueNumber())
 	}
 
-	expectedPrompt := buildIssueCommentPrompt(issueNum)
+	expectedPrompt := buildIssueCommentPrompt(issueNum, "hello")
 	if upReq.GetPrompt() != expectedPrompt {
 		t.Errorf("expected Prompt %q, got %q", expectedPrompt, upReq.GetPrompt())
 	}
