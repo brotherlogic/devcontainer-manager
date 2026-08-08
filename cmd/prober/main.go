@@ -25,6 +25,18 @@ type ProberConfig struct {
 	Prompt1 string // Initial prompt passed in UpRequest
 	Prompt2 string // Secondary prompt sent via PushPrompt
 	Timeout time.Duration
+	Harness proto.Harness
+}
+
+func parseHarness(harnessStr string) (proto.Harness, error) {
+	switch strings.ToLower(harnessStr) {
+	case "antigravity", "":
+		return proto.Harness_HARNESS_ANTIGRAVITY, nil
+	case "pi":
+		return proto.Harness_HARNESS_PI, nil
+	default:
+		return proto.Harness_HARNESS_UNSPECIFIED, fmt.Errorf("invalid harness %q, expected 'antigravity' or 'pi'", harnessStr)
+	}
 }
 
 type githubClient interface {
@@ -217,6 +229,7 @@ func RunProber(ctx context.Context, cfg ProberConfig, ghClient githubClient, man
 		Branch:     branchName,
 		Identifier: &proto.Identifier{Id: &proto.Identifier_IssueNumber{IssueNumber: issueNum}},
 		Prompt:     buildIssueCommentPrompt(issueNum, cfg.Prompt1),
+		Harness:    cfg.Harness,
 	})
 	if err != nil {
 		return fmt.Errorf("failed calling Up: %w", err)
@@ -271,7 +284,13 @@ func main() {
 	prompt1 := flag.String("prompt-1", "hello", "First prompt comment check")
 	prompt2 := flag.String("prompt-2", "goodbye", "Second prompt to send and check")
 	timeout := flag.Duration("timeout", 5*time.Minute, "Timeout duration")
+	harnessFlag := flag.String("harness", "antigravity", "Harness type ('antigravity' or 'pi')")
 	flag.Parse()
+
+	harness, err := parseHarness(*harnessFlag)
+	if err != nil {
+		log.Fatalf("invalid harness flag: %v", err)
+	}
 
 	cfg := ProberConfig{
 		Server:  *server,
@@ -279,6 +298,7 @@ func main() {
 		Prompt1: *prompt1,
 		Prompt2: *prompt2,
 		Timeout: *timeout,
+		Harness: harness,
 	}
 
 	gh, err := getGitHubClient()
