@@ -566,7 +566,7 @@ func run(ctx context.Context, cfg *config) error {
 						wg.Add(1)
 						go func(cid string) {
 							defer wg.Done()
-							if err := injectStartupCommand(ctx, repo, cid, cfg.startupCommand); err != nil {
+							if err := injectStartupCommand(ctx, repo, cid, cfg.startupCommand, proto.Harness_HARNESS_ANTIGRAVITY); err != nil {
 								logWithPrefix(repo, "ERROR: Failed to inject startup command for container %s: %v", cid, err)
 							}
 						}(id)
@@ -718,7 +718,7 @@ func run(ctx context.Context, cfg *config) error {
 									wg.Add(1)
 									go func(cid string) {
 										defer wg.Done()
-										if err := injectStartupCommand(ctx, repo, cid, cmdToInject); err != nil {
+										if err := injectStartupCommand(ctx, repo, cid, cmdToInject, proto.Harness_HARNESS_ANTIGRAVITY); err != nil {
 											logWithPrefix(repo, "ERROR: Failed to inject startup command for container %s: %v", cid, err)
 										}
 									}(containerID)
@@ -1011,7 +1011,17 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 		renameDockerContainer(config.Id)
 
 		cmdToInject := cfg.startupCommand
-		if req.GetPrompt() != "" {
+		if req.GetHarness() == proto.Harness_HARNESS_PI {
+			prompt := req.GetPrompt()
+			if prompt == "" {
+				if issueNum > 0 {
+					prompt = fmt.Sprintf("Take a look at the status of issue #%d - if the label matches any of the workflows in the brotherlogic/seraphine project's .agent/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work", issueNum)
+				} else {
+					prompt = "Take a look at the status of this issue - if the label matches any of the workflows in the brotherlogic/seraphine project's .agent/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"
+				}
+			}
+			cmdToInject = fmt.Sprintf("pi --prompt %s", shellQuote(prompt))
+		} else if req.GetPrompt() != "" {
 			cmdToInject = fmt.Sprintf("%s %s", agyInteractivePrefix, shellQuote(req.GetPrompt()))
 		} else if cmdToInject == "" {
 			if issueNum > 0 {
@@ -1025,8 +1035,23 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 			wg.Add(1)
 			go func(cid string) {
 				defer wg.Done()
-				if err := injectStartupCommand(ctx, req.GetRepo(), cid, cmdToInject); err != nil {
+				if err := injectStartupCommand(ctx, req.GetRepo(), cid, cmdToInject, req.GetHarness()); err != nil {
 					logWithPrefix(cid, "ERROR: Failed to inject startup command for container %s: %v", cid, err)
+					config.State = proto.State_DCM_FAILED
+					config.ErrorMessage = err.Error()
+					globalCache.Update(cid, config)
+
+					if client != nil && owner != "" && repoName != "" && issueNum > 0 {
+						adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-failed", []string{"container-creating", "container-ready"})
+					}
+					if delErr := deleteContainer(req.GetRepo(), cid); delErr != nil {
+						logWithPrefix(cid, "Warning: failed to delete failed devcontainer %s: %v", cid, delErr)
+					}
+					// Ensure the failed status remains in the cache for dashboard visibility despite the container deletion
+					globalCache.Update(cid, config)
+					if client != nil && owner != "" && repoName != "" {
+						go reportStartupFailure(ctx, client, owner, repoName, req.GetBranch(), issueNum, err, "")
+					}
 				}
 			}(config.Id)
 		}
@@ -1522,7 +1547,7 @@ func recreateContainer(ctx context.Context, repo string, id string, startupCmd s
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := injectStartupCommand(ctx, repo, id, startupCmd); err != nil {
+			if err := injectStartupCommand(ctx, repo, id, startupCmd, proto.Harness_HARNESS_ANTIGRAVITY); err != nil {
 				logWithPrefix(repo, "ERROR: Failed to inject startup command for container %s: %v", id, err)
 			}
 		}()
@@ -1590,7 +1615,7 @@ func recreateIssueContainer(ctx context.Context, owner, repoName, branchName, co
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := injectStartupCommand(ctx, repo, containerID, cmdToInject); err != nil {
+		if err := injectStartupCommand(ctx, repo, containerID, cmdToInject, proto.Harness_HARNESS_ANTIGRAVITY); err != nil {
 			logWithPrefix(repo, "ERROR: Failed to inject startup command for container %s: %v", containerID, err)
 		}
 	}()
@@ -1601,7 +1626,7 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
-func injectStartupCommand(ctx context.Context, repo string, id string, startupCmd string) error {
+func injectStartupCommand(ctx context.Context, repo string, id string, startupCmd string, harness proto.Harness) error {
 	if startupCmd == "" {
 		return nil
 	}
@@ -1640,7 +1665,22 @@ func injectStartupCommand(ctx context.Context, repo string, id string, startupCm
 			}
 
 			if err == nil {
-				logWithPrefix(repo, "Container %s tmux session %q is ready. Injecting startup command...", id, sessionName)
+				logWithPrefix(repo, "Container %s tmux session %q is ready.", id, sessionName)
+
+				if harness == proto.Harness_HARNESS_PI {
+					logWithPrefix(repo, "Checking if pi is installed in container %s...", id)
+					_, checkErr := runCommandWithLog(repo, devpodExe, "ssh", id, "--command", "command -v pi")
+					if checkErr != nil {
+						logWithPrefix(repo, "pi missing in container %s. Running installation script (pi.dev)...", id)
+						installOut, installErr := runCommandWithLog(repo, devpodExe, "ssh", id, "--command", "curl -fsSL https://pi.dev | sh")
+						if installErr != nil {
+							logWithPrefix(repo, "Failed to install pi in container %s: %v (output: %s)", id, installErr, string(installOut))
+							return fmt.Errorf("failed to install pi: %w (output: %s)", installErr, string(installOut))
+						}
+					}
+				}
+
+				logWithPrefix(repo, "Injecting startup command...")
 				injectOut, injectErr := runCommandWithLog(repo, devpodExe, "ssh", id, "--command", fmt.Sprintf("tmux send-keys -t %s %s C-m", sessionName, shellQuote(startupCmd)))
 				if injectErr != nil {
 					logWithPrefix(repo, "Failed to inject startup command for %s: %v (output: %s)", id, injectErr, string(injectOut))
