@@ -295,6 +295,7 @@ func (s *Server) Up(ctx context.Context, req *proto.UpRequest) (*proto.UpRespons
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// Enforce explicit harness selection (HARNESS_ANTIGRAVITY or HARNESS_PI).
 	if req.GetHarness() == proto.Harness_HARNESS_UNSPECIFIED {
 		return nil, status.Errorf(codes.InvalidArgument, "harness must be explicitly specified (HARNESS_ANTIGRAVITY or HARNESS_PI)")
 	}
