@@ -133,8 +133,9 @@ func TestUpRPCExistingBranch(t *testing.T) {
 	server := NewServer(cache, mockGit)
 
 	req := &proto.UpRequest{
-		Repo:   "brotherlogic/test-repo",
-		Branch: "feature/test",
+		Repo:    "brotherlogic/test-repo",
+		Branch:  "feature/test",
+		Harness: proto.Harness_HARNESS_ANTIGRAVITY,
 	}
 
 	resp, err := server.Up(context.Background(), req)
@@ -160,8 +161,9 @@ func TestUpRPCAutoCreateBranch(t *testing.T) {
 	server := NewServer(cache, mockGit)
 
 	req := &proto.UpRequest{
-		Repo:   "brotherlogic/test-repo",
-		Branch: "feature/new-branch",
+		Repo:    "brotherlogic/test-repo",
+		Branch:  "feature/new-branch",
+		Harness: proto.Harness_HARNESS_ANTIGRAVITY,
 	}
 
 	resp, err := server.Up(context.Background(), req)
@@ -188,6 +190,7 @@ func TestUpRPCIssueCleanID(t *testing.T) {
 		Identifier: &proto.Identifier{
 			Id: &proto.Identifier_IssueNumber{IssueNumber: 275},
 		},
+		Harness: proto.Harness_HARNESS_ANTIGRAVITY,
 	}
 
 	resp, err := server.Up(context.Background(), req)
@@ -208,8 +211,9 @@ func TestUpRPC_ModelValidation(t *testing.T) {
 
 	// Test valid model
 	reqValid := &proto.UpRequest{
-		Repo:  "test/repo",
-		Model: "gemini-3.6-flash-low",
+		Repo:    "test/repo",
+		Model:   "gemini-3.6-flash-low",
+		Harness: proto.Harness_HARNESS_ANTIGRAVITY,
 	}
 	resp, err := srv.Up(context.Background(), reqValid)
 	if err != nil {
@@ -221,8 +225,9 @@ func TestUpRPC_ModelValidation(t *testing.T) {
 
 	// Test invalid model
 	reqInvalid := &proto.UpRequest{
-		Repo:  "test/repo",
-		Model: "invalid-model-name",
+		Repo:    "test/repo",
+		Model:   "invalid-model-name",
+		Harness: proto.Harness_HARNESS_ANTIGRAVITY,
 	}
 	_, err = srv.Up(context.Background(), reqInvalid)
 	if err == nil {
@@ -231,6 +236,58 @@ func TestUpRPC_ModelValidation(t *testing.T) {
 	st, ok := status.FromError(err)
 	if !ok || st.Code() != codes.InvalidArgument {
 		t.Errorf("expected InvalidArgument status error, got: %v", err)
+	}
+}
+
+func TestUpRPC_HarnessValidation(t *testing.T) {
+	cache := NewCache()
+	srv := NewServer(cache, nil)
+
+	// Unspecified harness should fail with InvalidArgument
+	reqUnspecified := &proto.UpRequest{
+		Repo:    "brotherlogic/test-repo",
+		Branch:  "main",
+		Harness: proto.Harness_HARNESS_UNSPECIFIED,
+	}
+	_, err := srv.Up(context.Background(), reqUnspecified)
+	if err == nil {
+		t.Fatalf("expected error for HARNESS_UNSPECIFIED, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument status error, got: %v", err)
+	}
+	expectedMsg := "harness must be explicitly specified (HARNESS_ANTIGRAVITY or HARNESS_PI)"
+	if !strings.Contains(st.Message(), expectedMsg) {
+		t.Errorf("expected error message to contain %q, got %q", expectedMsg, st.Message())
+	}
+
+	// HARNESS_ANTIGRAVITY harness should succeed
+	reqAntigravity := &proto.UpRequest{
+		Repo:    "brotherlogic/test-repo",
+		Branch:  "main",
+		Harness: proto.Harness_HARNESS_ANTIGRAVITY,
+	}
+	respAnti, err := srv.Up(context.Background(), reqAntigravity)
+	if err != nil {
+		t.Fatalf("unexpected error for HARNESS_ANTIGRAVITY: %v", err)
+	}
+	if respAnti == nil || respAnti.Config == nil {
+		t.Fatalf("expected non-nil response config for HARNESS_ANTIGRAVITY")
+	}
+
+	// HARNESS_PI harness should succeed
+	reqPi := &proto.UpRequest{
+		Repo:    "brotherlogic/test-repo",
+		Branch:  "main",
+		Harness: proto.Harness_HARNESS_PI,
+	}
+	respPi, err := srv.Up(context.Background(), reqPi)
+	if err != nil {
+		t.Fatalf("unexpected error for HARNESS_PI: %v", err)
+	}
+	if respPi == nil || respPi.Config == nil {
+		t.Fatalf("expected non-nil response config for HARNESS_PI")
 	}
 }
 

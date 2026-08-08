@@ -295,6 +295,9 @@ func (s *Server) Up(ctx context.Context, req *proto.UpRequest) (*proto.UpRespons
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if req.GetHarness() == proto.Harness_HARNESS_UNSPECIFIED {
+		return nil, status.Errorf(codes.InvalidArgument, "harness must be explicitly specified (HARNESS_ANTIGRAVITY or HARNESS_PI)")
+	}
 	if req.GetModel() != "" && !s.IsModelSupported(req.GetModel()) {
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported model: %s", req.GetModel())
 	}
