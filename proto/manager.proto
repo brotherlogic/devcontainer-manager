@@ -29,12 +29,19 @@ message Identifier {
   }
 }
 
+enum Harness {
+  HARNESS_UNSPECIFIED = 0;
+  HARNESS_ANTIGRAVITY = 1;
+  HARNESS_PI = 2;
+}
+
 message UpRequest {
   string repo = 1;
   Identifier identifier = 2; // e.g., Issue or PR number
   string branch = 3;
   string prompt = 4;
   string model = 5;
+  Harness harness = 6;
 }
 
 message UpResponse {

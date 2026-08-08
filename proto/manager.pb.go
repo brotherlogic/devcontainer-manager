@@ -85,6 +85,55 @@ func (State) EnumDescriptor() ([]byte, []int) {
 	return file_proto_manager_proto_rawDescGZIP(), []int{0}
 }
 
+type Harness int32
+
+const (
+	Harness_HARNESS_UNSPECIFIED Harness = 0
+	Harness_HARNESS_ANTIGRAVITY Harness = 1
+	Harness_HARNESS_PI          Harness = 2
+)
+
+// Enum value maps for Harness.
+var (
+	Harness_name = map[int32]string{
+		0: "HARNESS_UNSPECIFIED",
+		1: "HARNESS_ANTIGRAVITY",
+		2: "HARNESS_PI",
+	}
+	Harness_value = map[string]int32{
+		"HARNESS_UNSPECIFIED": 0,
+		"HARNESS_ANTIGRAVITY": 1,
+		"HARNESS_PI":          2,
+	}
+)
+
+func (x Harness) Enum() *Harness {
+	p := new(Harness)
+	*p = x
+	return p
+}
+
+func (x Harness) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Harness) Descriptor() protoreflect.EnumDescriptor {
+	return file_proto_manager_proto_enumTypes[1].Descriptor()
+}
+
+func (Harness) Type() protoreflect.EnumType {
+	return &file_proto_manager_proto_enumTypes[1]
+}
+
+func (x Harness) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Harness.Descriptor instead.
+func (Harness) EnumDescriptor() ([]byte, []int) {
+	return file_proto_manager_proto_rawDescGZIP(), []int{1}
+}
+
 type Identifier struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Id:
@@ -174,6 +223,7 @@ type UpRequest struct {
 	Branch        string                 `protobuf:"bytes,3,opt,name=branch,proto3" json:"branch,omitempty"`
 	Prompt        string                 `protobuf:"bytes,4,opt,name=prompt,proto3" json:"prompt,omitempty"`
 	Model         string                 `protobuf:"bytes,5,opt,name=model,proto3" json:"model,omitempty"`
+	Harness       Harness                `protobuf:"varint,6,opt,name=harness,proto3,enum=manager.Harness" json:"harness,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -241,6 +291,13 @@ func (x *UpRequest) GetModel() string {
 		return x.Model
 	}
 	return ""
+}
+
+func (x *UpRequest) GetHarness() Harness {
+	if x != nil {
+		return x.Harness
+	}
+	return Harness_HARNESS_UNSPECIFIED
 }
 
 type UpResponse struct {
@@ -628,7 +685,7 @@ const file_proto_manager_proto_rawDesc = "" +
 	"Identifier\x12#\n" +
 	"\fissue_number\x18\x01 \x01(\x05H\x00R\vissueNumber\x12\x1d\n" +
 	"\tpr_number\x18\x02 \x01(\x05H\x00R\bprNumberB\x04\n" +
-	"\x02id\"\x9a\x01\n" +
+	"\x02id\"\xc6\x01\n" +
 	"\tUpRequest\x12\x12\n" +
 	"\x04repo\x18\x01 \x01(\tR\x04repo\x123\n" +
 	"\n" +
@@ -636,7 +693,8 @@ const file_proto_manager_proto_rawDesc = "" +
 	"identifier\x12\x16\n" +
 	"\x06branch\x18\x03 \x01(\tR\x06branch\x12\x16\n" +
 	"\x06prompt\x18\x04 \x01(\tR\x06prompt\x12\x14\n" +
-	"\x05model\x18\x05 \x01(\tR\x05model\"A\n" +
+	"\x05model\x18\x05 \x01(\tR\x05model\x12*\n" +
+	"\aharness\x18\x06 \x01(\x0e2\x10.manager.HarnessR\aharness\"A\n" +
 	"\n" +
 	"UpResponse\x123\n" +
 	"\x06config\x18\x01 \x01(\v2\x1b.manager.DevcontainerConfigR\x06config\"\x1d\n" +
@@ -666,7 +724,12 @@ const file_proto_manager_proto_rawDesc = "" +
 	"\tDCM_READY\x10\x05\x12\x0e\n" +
 	"\n" +
 	"DCM_FAILED\x10\x06\x12\x13\n" +
-	"\x0fDCM_HARD_FAILED\x10\a2\xf0\x01\n" +
+	"\x0fDCM_HARD_FAILED\x10\a*K\n" +
+	"\aHarness\x12\x17\n" +
+	"\x13HARNESS_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13HARNESS_ANTIGRAVITY\x10\x01\x12\x0e\n" +
+	"\n" +
+	"HARNESS_PI\x10\x022\xf0\x01\n" +
 	"\x0eManagerService\x12-\n" +
 	"\x02Up\x12\x12.manager.UpRequest\x1a\x13.manager.UpResponse\x123\n" +
 	"\x04Down\x12\x14.manager.DownRequest\x1a\x15.manager.DownResponse\x123\n" +
@@ -686,40 +749,42 @@ func file_proto_manager_proto_rawDescGZIP() []byte {
 	return file_proto_manager_proto_rawDescData
 }
 
-var file_proto_manager_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_proto_manager_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_proto_manager_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_proto_manager_proto_goTypes = []any{
 	(State)(0),                 // 0: manager.State
-	(*Identifier)(nil),         // 1: manager.Identifier
-	(*UpRequest)(nil),          // 2: manager.UpRequest
-	(*UpResponse)(nil),         // 3: manager.UpResponse
-	(*DownRequest)(nil),        // 4: manager.DownRequest
-	(*DownResponse)(nil),       // 5: manager.DownResponse
-	(*ListRequest)(nil),        // 6: manager.ListRequest
-	(*ListResponse)(nil),       // 7: manager.ListResponse
-	(*PushPromptRequest)(nil),  // 8: manager.PushPromptRequest
-	(*PushPromptResponse)(nil), // 9: manager.PushPromptResponse
-	(*DevcontainerConfig)(nil), // 10: manager.DevcontainerConfig
+	(Harness)(0),               // 1: manager.Harness
+	(*Identifier)(nil),         // 2: manager.Identifier
+	(*UpRequest)(nil),          // 3: manager.UpRequest
+	(*UpResponse)(nil),         // 4: manager.UpResponse
+	(*DownRequest)(nil),        // 5: manager.DownRequest
+	(*DownResponse)(nil),       // 6: manager.DownResponse
+	(*ListRequest)(nil),        // 7: manager.ListRequest
+	(*ListResponse)(nil),       // 8: manager.ListResponse
+	(*PushPromptRequest)(nil),  // 9: manager.PushPromptRequest
+	(*PushPromptResponse)(nil), // 10: manager.PushPromptResponse
+	(*DevcontainerConfig)(nil), // 11: manager.DevcontainerConfig
 }
 var file_proto_manager_proto_depIdxs = []int32{
-	1,  // 0: manager.UpRequest.identifier:type_name -> manager.Identifier
-	10, // 1: manager.UpResponse.config:type_name -> manager.DevcontainerConfig
-	10, // 2: manager.ListResponse.configs:type_name -> manager.DevcontainerConfig
-	2,  // 3: manager.DevcontainerConfig.request:type_name -> manager.UpRequest
-	0,  // 4: manager.DevcontainerConfig.state:type_name -> manager.State
-	2,  // 5: manager.ManagerService.Up:input_type -> manager.UpRequest
-	4,  // 6: manager.ManagerService.Down:input_type -> manager.DownRequest
-	6,  // 7: manager.ManagerService.List:input_type -> manager.ListRequest
-	8,  // 8: manager.ManagerService.PushPrompt:input_type -> manager.PushPromptRequest
-	3,  // 9: manager.ManagerService.Up:output_type -> manager.UpResponse
-	5,  // 10: manager.ManagerService.Down:output_type -> manager.DownResponse
-	7,  // 11: manager.ManagerService.List:output_type -> manager.ListResponse
-	9,  // 12: manager.ManagerService.PushPrompt:output_type -> manager.PushPromptResponse
-	9,  // [9:13] is the sub-list for method output_type
-	5,  // [5:9] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	2,  // 0: manager.UpRequest.identifier:type_name -> manager.Identifier
+	1,  // 1: manager.UpRequest.harness:type_name -> manager.Harness
+	11, // 2: manager.UpResponse.config:type_name -> manager.DevcontainerConfig
+	11, // 3: manager.ListResponse.configs:type_name -> manager.DevcontainerConfig
+	3,  // 4: manager.DevcontainerConfig.request:type_name -> manager.UpRequest
+	0,  // 5: manager.DevcontainerConfig.state:type_name -> manager.State
+	3,  // 6: manager.ManagerService.Up:input_type -> manager.UpRequest
+	5,  // 7: manager.ManagerService.Down:input_type -> manager.DownRequest
+	7,  // 8: manager.ManagerService.List:input_type -> manager.ListRequest
+	9,  // 9: manager.ManagerService.PushPrompt:input_type -> manager.PushPromptRequest
+	4,  // 10: manager.ManagerService.Up:output_type -> manager.UpResponse
+	6,  // 11: manager.ManagerService.Down:output_type -> manager.DownResponse
+	8,  // 12: manager.ManagerService.List:output_type -> manager.ListResponse
+	10, // 13: manager.ManagerService.PushPrompt:output_type -> manager.PushPromptResponse
+	10, // [10:14] is the sub-list for method output_type
+	6,  // [6:10] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_proto_manager_proto_init() }
@@ -736,7 +801,7 @@ func file_proto_manager_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_manager_proto_rawDesc), len(file_proto_manager_proto_rawDesc)),
-			NumEnums:      1,
+			NumEnums:      2,
 			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,

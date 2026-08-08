@@ -114,7 +114,7 @@ DCM keeps track of the active configurations it processes to prevent redundant r
 ## 📊 gRPC Manager Service (Previously Dashboard)
 
 DCM hosts a gRPC service implementing `ManagerService` defined in `proto/manager.proto` (which replaces and deprecates `dashboard.proto`). This service provides:
-*   **Up RPC:** Programmatically trigger the creation of a devcontainer for a specific repository, branch, or issue. Automatically checks if the specified branch exists on the target repository and creates it off `main` (or default branch) if missing.
+*   **Up RPC:** Programmatically trigger the creation of a devcontainer for a specific repository, branch, or issue (with explicit harness selection via `Harness` enum: `HARNESS_UNSPECIFIED`, `HARNESS_ANTIGRAVITY`, `HARNESS_PI`). Automatically checks if the specified branch exists on the target repository and creates it off `main` (or default branch) if missing.
 *   **Down RPC:** Terminates and cleans up an existing devcontainer instance/config from the cache by ID.
 *   **List RPC:** Retrieves a list of active devcontainers with their metadata, including ID, Request details, current State (`DCM_RECEIVED`, `DCM_READY`, `DCM_FAILED`, etc.), and retry status.
 *   **PushPrompt RPC:** Dispatches prompt payloads to target containers in the in-memory cache. Validates container existence (`NotFound` error if missing) and verifies container state is `DCM_READY` (`FailedPrecondition` error if not). Verifies that the tmux session is active (with fallback to the base ID if the session was created without the issue number suffix), and uses `devpod ssh` with `tmux send-keys` to inject the prompt. Retains containers in `DCM_READY` state after prompt execution to allow subsequent prompt calls.
