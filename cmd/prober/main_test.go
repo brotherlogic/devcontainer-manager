@@ -320,6 +320,7 @@ func TestRunProber_UpRPCInvocation(t *testing.T) {
 		Prompt1: "hello",
 		Prompt2: "goodbye",
 		Timeout: 2 * time.Second,
+		Harness: proto.Harness_HARNESS_PI,
 	}
 
 	issueNum := int32(789)
@@ -387,5 +388,33 @@ func TestRunProber_UpRPCInvocation(t *testing.T) {
 	if !strings.HasPrefix(upReq.GetBranch(), "feature/test-") {
 		t.Errorf("expected Branch to have prefix 'feature/test-', got %q", upReq.GetBranch())
 	}
+
+	if upReq.GetHarness() != proto.Harness_HARNESS_PI {
+		t.Errorf("expected Harness HARNESS_PI, got %v", upReq.GetHarness())
+	}
 }
+
+func TestParseHarness(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    proto.Harness
+		wantErr bool
+	}{
+		{"antigravity", proto.Harness_HARNESS_ANTIGRAVITY, false},
+		{"pi", proto.Harness_HARNESS_PI, false},
+		{"invalid", proto.Harness_HARNESS_UNSPECIFIED, true},
+	}
+
+	for _, tt := range tests {
+		got, err := parseHarness(tt.input)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("parseHarness(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("parseHarness(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
 
