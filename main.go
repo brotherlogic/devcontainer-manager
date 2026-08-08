@@ -1626,6 +1626,9 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
+// injectStartupCommand polls a devcontainer tmux session for readiness and injects the specified startup command into tmux.
+// If harness is HARNESS_PI, it checks if `pi` is installed via `command -v pi` and executes the pi.dev installation script if missing.
+// All injected prompt strings and commands are safely quoted using shellQuote to sanitize metacharacters and prevent shell command injection.
 func injectStartupCommand(ctx context.Context, repo string, id string, startupCmd string, harness proto.Harness) error {
 	if startupCmd == "" {
 		return nil
