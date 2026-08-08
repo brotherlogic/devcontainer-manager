@@ -2938,6 +2938,181 @@ func TestManualIssueContainerNotCleanedUpWhenOpen(t *testing.T) {
 	}
 }
 
+func TestProcessManualUpRequest_HarnessPi_Success(t *testing.T) {
+	oldInterval := pollingInterval
+	oldTimeout := pollingTimeout
+	pollingInterval = 1 * time.Millisecond
+	pollingTimeout = 100 * time.Millisecond
+	defer func() {
+		pollingInterval = oldInterval
+		pollingTimeout = oldTimeout
+	}()
+
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		if name == devpodExe && len(args) >= 4 && args[0] == "ssh" && args[2] == "--command" {
+			cmdStr := args[3]
+			if strings.Contains(cmdStr, "command -v pi") {
+				// Simulate pi missing initially
+				return []byte(""), fmt.Errorf("pi not found")
+			}
+			if strings.Contains(cmdStr, "pi.dev") {
+				// Simulate installation success
+				return []byte("installed pi"), nil
+			}
+			if strings.Contains(cmdStr, "has-session") {
+				return []byte("session exists"), nil
+			}
+		}
+		return []byte("success"), nil
+	}
+
+	configID := "test-repo-pi-1"
+	devConfig := &proto.DevcontainerConfig{
+		Id: configID,
+		Request: &proto.UpRequest{
+			Repo:    "brotherlogic/test-repo",
+			Branch:  "main",
+			Prompt:  "Run pi task",
+			Harness: proto.Harness_HARNESS_PI,
+			Identifier: &proto.Identifier{
+				Id: &proto.Identifier_IssueNumber{IssueNumber: 349},
+			},
+		},
+		State: proto.State_DCM_RECEIVED,
+	}
+	globalCache.Update(configID, devConfig)
+	defer globalCache.Delete(configID)
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+	wg.Add(1)
+
+	cfg := &config{
+		startupCommand: "",
+	}
+
+	processManualUpRequest(context.Background(), devConfig, &wg, cfg, sem)
+	wg.Wait()
+
+	// Verify command -v pi check was called
+	var foundPiCheck, foundPiInstall, foundPiSendKeys bool
+	for _, cmd := range capturedCommands {
+		if cmd[0] == devpodExe && cmd[1] == "ssh" && cmd[2] == configID && cmd[3] == "--command" {
+			c := cmd[4]
+			if strings.Contains(c, "command -v pi") {
+				foundPiCheck = true
+			}
+			if strings.Contains(c, "pi.dev") {
+				foundPiInstall = true
+			}
+			if strings.Contains(c, "send-keys") && strings.Contains(c, "pi --prompt") && strings.Contains(c, "Run pi task") {
+				foundPiSendKeys = true
+			}
+		}
+	}
+
+	if !foundPiCheck {
+		t.Errorf("expected command -v pi check to be run via devpod ssh, captured: %v", capturedCommands)
+	}
+	if !foundPiInstall {
+		t.Errorf("expected pi.dev installation script to be run when pi was missing, captured: %v", capturedCommands)
+	}
+	if !foundPiSendKeys {
+		t.Errorf("expected tmux send-keys with pi --prompt 'Run pi task' to be injected, captured: %v", capturedCommands)
+	}
+
+	cached, ok := globalCache.Get(configID)
+	if !ok || cached.State != proto.State_DCM_READY {
+		t.Errorf("expected container state DCM_READY, got: %v (exists: %v)", cached, ok)
+	}
+}
+
+func TestProcessManualUpRequest_HarnessPi_InstallationFailure(t *testing.T) {
+	oldInterval := pollingInterval
+	oldTimeout := pollingTimeout
+	pollingInterval = 1 * time.Millisecond
+	pollingTimeout = 100 * time.Millisecond
+	defer func() {
+		pollingInterval = oldInterval
+		pollingTimeout = oldTimeout
+	}()
+
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		if name == devpodExe && len(args) >= 4 && args[0] == "ssh" && args[2] == "--command" {
+			cmdStr := args[3]
+			if strings.Contains(cmdStr, "command -v pi") {
+				return []byte(""), fmt.Errorf("pi not found")
+			}
+			if strings.Contains(cmdStr, "pi.dev") {
+				return []byte("failed install"), fmt.Errorf("pi installation failed")
+			}
+			if strings.Contains(cmdStr, "has-session") {
+				return []byte("session exists"), nil
+			}
+		}
+		return []byte("success"), nil
+	}
+
+	configID := "test-repo-pi-fail"
+	devConfig := &proto.DevcontainerConfig{
+		Id: configID,
+		Request: &proto.UpRequest{
+			Repo:    "brotherlogic/test-repo",
+			Branch:  "main",
+			Prompt:  "Run pi task",
+			Harness: proto.Harness_HARNESS_PI,
+			Identifier: &proto.Identifier{
+				Id: &proto.Identifier_IssueNumber{IssueNumber: 349},
+			},
+		},
+		State: proto.State_DCM_RECEIVED,
+	}
+	globalCache.Update(configID, devConfig)
+	defer globalCache.Delete(configID)
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+	wg.Add(1)
+
+	cfg := &config{
+		startupCommand: "",
+	}
+
+	processManualUpRequest(context.Background(), devConfig, &wg, cfg, sem)
+	wg.Wait()
+
+	cached, ok := globalCache.Get(configID)
+	if !ok {
+		t.Fatalf("expected container in cache")
+	}
+	if cached.State != proto.State_DCM_FAILED {
+		t.Errorf("expected state DCM_FAILED upon installation failure, got %v", cached.State)
+	}
+
+	var foundDelete bool
+	for _, cmd := range capturedCommands {
+		if cmd[0] == devpodExe && cmd[1] == "delete" && cmd[2] == configID {
+			foundDelete = true
+		}
+	}
+	if !foundDelete {
+		t.Errorf("expected devpod delete to be called for failed container, captured: %v", capturedCommands)
+	}
+}
+
+
 
 
 
