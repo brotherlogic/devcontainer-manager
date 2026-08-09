@@ -417,6 +417,7 @@ func TestParseHarness(t *testing.T) {
 	}
 }
 
+// TestParseHarness_MappingValidation tests that string inputs for --harness are correctly mapped to proto.Harness enum values.
 func TestParseHarness_MappingValidation(t *testing.T) {
 	tests := []struct {
 		name    string
