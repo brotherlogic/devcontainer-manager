@@ -417,4 +417,34 @@ func TestParseHarness(t *testing.T) {
 	}
 }
 
+// TestParseHarness_MappingValidation tests that string inputs for --harness are correctly mapped to proto.Harness enum values.
+func TestParseHarness_MappingValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    proto.Harness
+		wantErr bool
+	}{
+		{name: "pi lowercase", input: "pi", want: proto.Harness_HARNESS_PI, wantErr: false},
+		{name: "pi uppercase", input: "PI", want: proto.Harness_HARNESS_PI, wantErr: false},
+		{name: "antigravity lowercase", input: "antigravity", want: proto.Harness_HARNESS_ANTIGRAVITY, wantErr: false},
+		{name: "antigravity titlecase", input: "Antigravity", want: proto.Harness_HARNESS_ANTIGRAVITY, wantErr: false},
+		{name: "empty defaults to antigravity", input: "", want: proto.Harness_HARNESS_ANTIGRAVITY, wantErr: false},
+		{name: "invalid harness string", input: "unsupported_harness", want: proto.Harness_HARNESS_UNSPECIFIED, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseHarness(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseHarness(%q) unexpected error status: got err=%v, wantErr=%v", tt.input, err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("parseHarness(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+
 
