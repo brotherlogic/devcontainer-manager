@@ -3112,6 +3112,8 @@ func TestProcessManualUpRequest_HarnessPi_InstallationFailure(t *testing.T) {
 	}
 }
 
+// TestProcessManualUpRequest_HarnessPi_InjectionFailure verifies that when HARNESS_PI command injection fails via tmux send-keys,
+// the devcontainer state is transitioned to DCM_FAILED and the container cleanup is triggered.
 func TestProcessManualUpRequest_HarnessPi_InjectionFailure(t *testing.T) {
 	oldInterval := pollingInterval
 	oldTimeout := pollingTimeout
