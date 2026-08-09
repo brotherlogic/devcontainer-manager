@@ -3112,6 +3112,86 @@ func TestProcessManualUpRequest_HarnessPi_InstallationFailure(t *testing.T) {
 	}
 }
 
+func TestProcessManualUpRequest_HarnessPi_InjectionFailure(t *testing.T) {
+	oldInterval := pollingInterval
+	oldTimeout := pollingTimeout
+	pollingInterval = 1 * time.Millisecond
+	pollingTimeout = 100 * time.Millisecond
+	defer func() {
+		pollingInterval = oldInterval
+		pollingTimeout = oldTimeout
+	}()
+
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		if name == devpodExe && len(args) >= 4 && args[0] == "ssh" && args[2] == "--command" {
+			cmdStr := args[3]
+			if strings.Contains(cmdStr, "command -v pi") {
+				return []byte("pi"), nil
+			}
+			if strings.Contains(cmdStr, "has-session") {
+				return []byte("session exists"), nil
+			}
+			if strings.Contains(cmdStr, "send-keys") {
+				return []byte("injection failed"), fmt.Errorf("tmux send-keys failed")
+			}
+		}
+		return []byte("success"), nil
+	}
+
+	configID := "test-repo-pi-inject-fail"
+	devConfig := &proto.DevcontainerConfig{
+		Id: configID,
+		Request: &proto.UpRequest{
+			Repo:    "brotherlogic/test-repo",
+			Branch:  "main",
+			Prompt:  "Run pi task",
+			Harness: proto.Harness_HARNESS_PI,
+			Identifier: &proto.Identifier{
+				Id: &proto.Identifier_IssueNumber{IssueNumber: 349},
+			},
+		},
+		State: proto.State_DCM_RECEIVED,
+	}
+	globalCache.Update(configID, devConfig)
+	defer globalCache.Delete(configID)
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+	wg.Add(1)
+
+	cfg := &config{
+		startupCommand: "",
+	}
+
+	processManualUpRequest(context.Background(), devConfig, &wg, cfg, sem)
+	wg.Wait()
+
+	cached, ok := globalCache.Get(configID)
+	if !ok {
+		t.Fatalf("expected container in cache")
+	}
+	if cached.State != proto.State_DCM_FAILED {
+		t.Errorf("expected state DCM_FAILED upon injection failure, got %v", cached.State)
+	}
+
+	var foundDelete bool
+	for _, cmd := range capturedCommands {
+		if cmd[0] == devpodExe && cmd[1] == "delete" && cmd[2] == configID {
+			foundDelete = true
+		}
+	}
+	if !foundDelete {
+		t.Errorf("expected devpod delete to be called for failed container, captured: %v", capturedCommands)
+	}
+}
+
+
 
 
 
