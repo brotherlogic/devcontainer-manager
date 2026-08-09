@@ -290,7 +290,7 @@ func getCleanID(repoURL, branchName string, issueNum int32) string {
 	return strings.TrimSuffix(id, "-")
 }
 
-// Up handles creating/starting a devcontainer workspace request with model validation and branch auto-creation.
+// Up handles creating/starting a devcontainer workspace request with harness validation, model validation, and branch auto-creation.
 func (s *Server) Up(ctx context.Context, req *proto.UpRequest) (*proto.UpResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
