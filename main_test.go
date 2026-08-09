@@ -19,6 +19,8 @@ import (
 	"github.com/brotherlogic/devcontainer-manager/proto"
 	srvPkg "github.com/brotherlogic/devcontainer-manager/server"
 	"github.com/google/go-github/v50/github"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestParseFlags_Defaults(t *testing.T) {
@@ -3192,6 +3194,29 @@ func TestProcessManualUpRequest_HarnessPi_InjectionFailure(t *testing.T) {
 		t.Errorf("expected devpod delete to be called for failed container, captured: %v", capturedCommands)
 	}
 }
+
+// TestProcessManualUpRequest_HarnessUnspecified_ReturnsError verifies that an Up RPC request with HARNESS_UNSPECIFIED returns an InvalidArgument status error.
+func TestProcessManualUpRequest_HarnessUnspecified_ReturnsError(t *testing.T) {
+	mgrServer := srvPkg.NewServer(globalCache, nil)
+	req := &proto.UpRequest{
+		Repo:    "brotherlogic/test-repo",
+		Branch:  "main",
+		Harness: proto.Harness_HARNESS_UNSPECIFIED,
+	}
+	_, err := mgrServer.Up(context.Background(), req)
+	if err == nil {
+		t.Fatalf("expected error for HARNESS_UNSPECIFIED, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument status error, got status: %v (err: %v)", st.Code(), err)
+	}
+	expectedMsg := "harness must be explicitly specified"
+	if !strings.Contains(st.Message(), expectedMsg) {
+		t.Errorf("expected error message to contain %q, got %q", expectedMsg, st.Message())
+	}
+}
+
 
 
 
