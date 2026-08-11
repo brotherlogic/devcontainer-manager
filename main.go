@@ -547,7 +547,7 @@ func run(ctx context.Context, cfg *config) error {
 				}
 				globalCache.Update(id, container)
 
-				out, err := runCommandWithLog(repo, devpodExe, "up", fmt.Sprintf("git@github.com:%s", repo), "--id", id, "--ide", "none")
+				out, err := runCommandWithLog(repo, devpodExe, "up", fmt.Sprintf("git@github.com:%s", repo), "--id", id, "--ide", "none", "--provider", "docker")
 				if err != nil {
 					logWithPrefix(repo, "Failed to start devcontainer: %v (output: %s)", err, string(out))
 					container.State = proto.State_DCM_FAILED
@@ -678,7 +678,7 @@ func run(ctx context.Context, cfg *config) error {
 								globalCache.Update(containerID, container)
 
 								// Use --recreate to ensure we pull the freshest version of the container from head, avoiding stale caches.
-								out, err := runCommandWithLog(repo, devpodExe, "up", repoURL, "--id", containerID, "--ide", "none", "--recreate")
+								out, err := runCommandWithLog(repo, devpodExe, "up", repoURL, "--id", containerID, "--ide", "none", "--recreate", "--provider", "docker")
 								if err != nil {
 									logWithPrefix(repo, "Failed to launch devcontainer for issue %d: %v (output: %s)", issueNumber, err, string(out))
 									container.State = proto.State_DCM_FAILED
@@ -980,7 +980,7 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 
 	// Execute container provisioning logic
 	logWithPrefix(config.Id, "Manually launching container %s on repo %s", config.Id, repoURL)
-	out, err := runCommandWithLog(config.Id, devpodExe, "up", repoURL, "--id", config.Id, "--ide", "none")
+	out, err := runCommandWithLog(config.Id, devpodExe, "up", repoURL, "--id", config.Id, "--ide", "none", "--provider", "docker")
 
 	if client != nil && owner != "" && repoName != "" && issueNum > 0 {
 		if err != nil {
@@ -1530,7 +1530,7 @@ func recreateContainer(ctx context.Context, repo string, id string, startupCmd s
 	}
 	globalCache.Update(id, container)
 
-	out, err := runCommandWithLog(repo, devpodExe, "up", fmt.Sprintf("git@github.com:%s", repo), "--id", id, "--ide", "none")
+	out, err := runCommandWithLog(repo, devpodExe, "up", fmt.Sprintf("git@github.com:%s", repo), "--id", id, "--ide", "none", "--provider", "docker")
 	if err != nil {
 		container.State = proto.State_DCM_FAILED
 		container.ErrorMessage = err.Error()
@@ -1583,7 +1583,7 @@ func recreateIssueContainer(ctx context.Context, owner, repoName, branchName, co
 	globalCache.Update(containerID, container)
 
 	// Use --recreate to ensure we pull the freshest version of the container from head, avoiding stale caches.
-	out, err := runCommandWithLog(repo, devpodExe, "up", repoURL, "--id", containerID, "--ide", "none", "--recreate")
+	out, err := runCommandWithLog(repo, devpodExe, "up", repoURL, "--id", containerID, "--ide", "none", "--recreate", "--provider", "docker")
 	if err != nil {
 		container.State = proto.State_DCM_FAILED
 		container.ErrorMessage = err.Error()

@@ -3217,6 +3217,64 @@ func TestProcessManualUpRequest_HarnessUnspecified_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestDevpodUpIncludesProviderFlag(t *testing.T) {
+	var capturedCmds [][]string
+	var mu sync.Mutex
+
+	origRunner := commandRunner
+	defer func() { commandRunner = origRunner }()
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		cmd := append([]string{name}, args...)
+		mu.Lock()
+		capturedCmds = append(capturedCmds, cmd)
+		mu.Unlock()
+		if name == devpodExe && len(args) > 0 && args[0] == "up" {
+			return []byte("ok"), nil
+		}
+		return []byte("ok"), nil
+	}
+
+	configID := "test-provider-container"
+	repoURL := "git@github.com:brotherlogic/test-repo"
+	cfg := &proto.DevcontainerConfig{
+		Id: configID,
+		Request: &proto.UpRequest{
+			Repo:    repoURL,
+			Harness: proto.Harness_HARNESS_ANTIGRAVITY,
+		},
+		State: proto.State_DCM_CREATING,
+	}
+
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	processManualUpRequest(context.Background(), cfg, &wg, &config{}, sem)
+	wg.Wait()
+
+	var foundProviderFlag bool
+	mu.Lock()
+	defer mu.Unlock()
+	for _, cmd := range capturedCmds {
+		if len(cmd) > 2 && cmd[0] == devpodExe && cmd[1] == "up" {
+			for i, arg := range cmd {
+				if arg == "--provider" && i+1 < len(cmd) && cmd[i+1] == "docker" {
+					foundProviderFlag = true
+					break
+				}
+			}
+		}
+	}
+
+	if !foundProviderFlag {
+		t.Errorf("expected devpod up command to include --provider docker, captured commands: %v", capturedCmds)
+	}
+}
+
+
+
 
 
 
