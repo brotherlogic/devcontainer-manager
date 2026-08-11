@@ -56,6 +56,19 @@ func getGHClient() (*github.Client, error) {
 }
 
 var devpodExe = "devpod"
+var devpodMutex sync.Mutex
+
+func isDevpodCommand(name string) bool {
+	return name == devpodExe || name == "devpod" || name == "devpod-cli"
+}
+
+func runDevpodCommand(name string, args ...string) ([]byte, error) {
+	if isDevpodCommand(name) {
+		devpodMutex.Lock()
+		defer devpodMutex.Unlock()
+	}
+	return commandRunner(name, args...)
+}
 
 func init() {
 	if _, err := exec.LookPath("devpod-cli"); err == nil {
@@ -77,7 +90,7 @@ type DevpodWorkspace struct {
 }
 
 func listDevpodWorkspaces() ([]DevpodWorkspace, error) {
-	out, err := commandRunner(devpodExe, "list", "--output", "json")
+	out, err := runDevpodCommand(devpodExe, "list", "--output", "json")
 	if err != nil {
 		return nil, err
 	}
@@ -1987,7 +2000,7 @@ func logWithPrefix(repo string, format string, args ...interface{}) {
 }
 
 func runCommandWithLog(repo string, name string, args ...string) ([]byte, error) {
-	out, err := commandRunner(name, args...)
+	out, err := runDevpodCommand(name, args...)
 	if len(out) > 0 {
 		for _, line := range strings.Split(string(out), "\n") {
 			if strings.TrimSpace(line) != "" {
