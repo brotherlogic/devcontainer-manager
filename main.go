@@ -56,12 +56,15 @@ func getGHClient() (*github.Client, error) {
 }
 
 var devpodExe = "devpod"
+
+// devpodMutex serializes all DevPod CLI operations across goroutines to prevent read/write race conditions on ~/.devpod/config.yaml.
 var devpodMutex sync.Mutex
 
 func isDevpodCommand(name string) bool {
 	return name == devpodExe || name == "devpod" || name == "devpod-cli"
 }
 
+// runDevpodCommand executes commandRunner with mutex locking when calling devpod CLI commands.
 func runDevpodCommand(name string, args ...string) ([]byte, error) {
 	if isDevpodCommand(name) {
 		devpodMutex.Lock()
