@@ -7,7 +7,7 @@ WorkingDirectory=%PROJECT_DIR%
 # Pull and rebuild on startup
 ExecStartPre=/bin/bash -c "cd %PROJECT_DIR% && (((git fetch -p && git merge --ff-only origin/main) || true) && %GO_CMD% build -o %h/.local/bin/devcontainer-manager main.go || true)"
 # Assumes the binary is installed here
-ExecStart=%h/.local/bin/devcontainer-manager
+ExecStart=%h/.local/bin/devcontainer-manager -max_issue_containers 20
 Restart=always
 RestartSec=10
 # Passes DBUS info so notify-send desktop notifications work from the background

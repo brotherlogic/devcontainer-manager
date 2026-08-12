@@ -3258,6 +3258,61 @@ func TestDevpodCLISerialization(t *testing.T) {
 	}
 }
 
+func TestAdjustIssueLabels_ReasonLogging(t *testing.T) {
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	var addedLabels []string
+	var removedLabels []string
+	var mu sync.Mutex
+
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/373", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"number": 373, "labels": [{"name": "container-creating"}]}`)
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/373/labels", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost {
+			var labels []string
+			json.NewDecoder(r.Body).Decode(&labels)
+			mu.Lock()
+			addedLabels = append(addedLabels, labels...)
+			mu.Unlock()
+			fmt.Fprint(w, `[]`)
+			return
+		}
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/373/labels/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodDelete {
+			parts := strings.Split(r.URL.Path, "/")
+			label := parts[len(parts)-1]
+			mu.Lock()
+			removedLabels = append(removedLabels, label)
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+	})
+
+	adjustIssueLabels(context.Background(), client, "test-owner", "test-repo", 373, "container-failed", []string{"container-creating", "container-ready"}, "startup command injection failed: pi installation error")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(addedLabels) != 1 || addedLabels[0] != "container-failed" {
+		t.Errorf("expected added label 'container-failed', got: %v", addedLabels)
+	}
+	if len(removedLabels) != 1 || removedLabels[0] != "container-creating" {
+		t.Errorf("expected removed label 'container-creating', got: %v", removedLabels)
+	}
+}
+
 
 
 
