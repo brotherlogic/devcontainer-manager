@@ -1554,8 +1554,8 @@ func TestRun_ConcurrencySemaphoreLimit(t *testing.T) {
 	}
 
 	observedMax := atomic.LoadInt32(&maxActiveRuns)
-	if observedMax != 2 {
-		t.Errorf("expected max concurrency limit of 2, but observed %d concurrent runs", observedMax)
+	if observedMax != 1 {
+		t.Errorf("expected max serialized devpod CLI runs to be 1, but observed %d concurrent runs", observedMax)
 	}
 }
 
@@ -3214,6 +3214,47 @@ func TestProcessManualUpRequest_HarnessUnspecified_ReturnsError(t *testing.T) {
 	expectedMsg := "harness must be explicitly specified"
 	if !strings.Contains(st.Message(), expectedMsg) {
 		t.Errorf("expected error message to contain %q, got %q", expectedMsg, st.Message())
+	}
+}
+
+func TestDevpodCLISerialization(t *testing.T) {
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var activeInvocations int32
+	var maxActiveInvocations int32
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		current := atomic.AddInt32(&activeInvocations, 1)
+		defer atomic.AddInt32(&activeInvocations, -1)
+
+		for {
+			max := atomic.LoadInt32(&maxActiveInvocations)
+			if current <= max {
+				break
+			}
+			if atomic.CompareAndSwapInt32(&maxActiveInvocations, max, current) {
+				break
+			}
+		}
+
+		time.Sleep(10 * time.Millisecond)
+		return []byte("ok"), nil
+	}
+
+	var wg sync.WaitGroup
+	goroutines := 10
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			_, _ = runCommandWithLog("test-repo", devpodExe, "up", fmt.Sprintf("id-%d", id))
+		}(i)
+	}
+	wg.Wait()
+
+	if maxActiveInvocations != 1 {
+		t.Errorf("expected max active devpod CLI invocations to be 1 (serialized), got %d", maxActiveInvocations)
 	}
 }
 
