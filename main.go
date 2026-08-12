@@ -659,12 +659,12 @@ func run(ctx context.Context, cfg *config) error {
 
 							if !isIssueRunning {
 								log.Printf("Discovered new issue #%d labeled 'seraphine' in %s. Provisioning container...", issueNumber, repo)
-								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-creating", []string{"container-ready", "container-failed"})
+								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-creating", []string{"container-ready", "container-failed"}, "provisioning container for issue")
 
 								slug, err := deriveFeatureSlug(issue.GetTitle())
 								if err != nil {
 									log.Printf("Failed to derive branch slug for issue %d: %v", issueNumber, err)
-									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
+									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"}, fmt.Sprintf("failed to derive branch slug: %v", err))
 									go reportStartupFailure(ctx, client, owner, repoName, "", issueNumber, err, "")
 									continue
 								}
@@ -673,7 +673,7 @@ func run(ctx context.Context, cfg *config) error {
 								err = ensureIssueBranchExists(ctx, client, owner, repoName, branchName)
 								if err != nil {
 									log.Printf("Failed to ensure issue branch %s exists: %v", branchName, err)
-									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
+									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"}, fmt.Sprintf("failed to ensure issue branch %s exists: %v", branchName, err))
 									go reportStartupFailure(ctx, client, owner, repoName, branchName, issueNumber, err, "")
 									continue
 								}
@@ -706,7 +706,7 @@ func run(ctx context.Context, cfg *config) error {
 									}
 									// Ensure the failed status remains in the cache for dashboard visibility despite the container deletion
 									globalCache.Update(containerID, container)
-									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
+									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"}, fmt.Sprintf("devpod up failed: %v", err))
 									go reportStartupFailure(ctx, client, owner, repoName, branchName, issueNumber, err, string(out))
 								} else {
 									container.State = proto.State_DCM_READY
@@ -715,7 +715,7 @@ func run(ctx context.Context, cfg *config) error {
 									running[containerID] = true
 									stateMu.Unlock()
 
-									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-ready", []string{"container-creating", "container-failed"})
+									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-ready", []string{"container-creating", "container-failed"}, "devpod up succeeded")
 
 									if issue.CreatedAt != nil {
 										wg.Add(1)
@@ -732,12 +732,26 @@ func run(ctx context.Context, cfg *config) error {
 										cmdToInject = fmt.Sprintf(`agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of issue #%d - if the label matches any of the workflows in the brotherlogic/seraphine project's .agent/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`, issueNumber)
 									}
 									wg.Add(1)
-									go func(cid string) {
+									go func(cid string, iNum int, bName string) {
 										defer wg.Done()
 										if err := injectStartupCommand(ctx, repo, cid, cmdToInject, proto.Harness_HARNESS_ANTIGRAVITY); err != nil {
 											logWithPrefix(repo, "ERROR: Failed to inject startup command for container %s: %v", cid, err)
+											container.State = proto.State_DCM_FAILED
+											container.ErrorMessage = err.Error()
+											globalCache.Update(cid, container)
+
+											if client != nil && owner != "" && repoName != "" && iNum > 0 {
+												adjustIssueLabels(ctx, client, owner, repoName, iNum, "container-failed", []string{"container-creating", "container-ready"}, fmt.Sprintf("startup command injection failed: %v", err))
+											}
+											if delErr := deleteContainer(repo, cid); delErr != nil {
+												logWithPrefix(repo, "Warning: failed to delete failed devcontainer %s: %v", cid, delErr)
+											}
+											globalCache.Update(cid, container)
+											if client != nil && owner != "" && repoName != "" {
+												go reportStartupFailure(ctx, client, owner, repoName, bName, iNum, err, "")
+											}
 										}
-									}(containerID)
+									}(containerID, issueNumber, branchName)
 
 									compositeSHA, found, err := getRepoCompositeSHA(ctx, client, repo, branchName)
 									if err == nil && found {
@@ -991,7 +1005,7 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 	client, _ := gitHubClientProvider()
 
 	if client != nil && owner != "" && repoName != "" && issueNum > 0 {
-		adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-creating", []string{"container-ready", "container-failed"})
+		adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-creating", []string{"container-ready", "container-failed"}, "manual container launch initiated")
 	}
 
 	// Execute container provisioning logic
@@ -1000,9 +1014,9 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 
 	if client != nil && owner != "" && repoName != "" && issueNum > 0 {
 		if err != nil {
-			adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-failed", []string{"container-creating", "container-ready"})
+			adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-failed", []string{"container-creating", "container-ready"}, fmt.Sprintf("manual container devpod up failed: %v", err))
 		} else {
-			adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-ready", []string{"container-creating", "container-failed"})
+			adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-ready", []string{"container-creating", "container-failed"}, "manual container devpod up succeeded")
 		}
 	}
 
@@ -1058,7 +1072,7 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 					globalCache.Update(cid, config)
 
 					if client != nil && owner != "" && repoName != "" && issueNum > 0 {
-						adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-failed", []string{"container-creating", "container-ready"})
+						adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-failed", []string{"container-creating", "container-ready"}, fmt.Sprintf("startup command injection failed: %v", err))
 					}
 					if delErr := deleteContainer(req.GetRepo(), cid); delErr != nil {
 						logWithPrefix(cid, "Warning: failed to delete failed devcontainer %s: %v", cid, delErr)
@@ -1798,14 +1812,15 @@ func ensureIssueBranchExists(ctx context.Context, client *github.Client, owner, 
 	return nil
 }
 
-func adjustIssueLabels(ctx context.Context, client *github.Client, owner, repo string, issueNumber int, addLabel string, removeLabels []string) {
+func adjustIssueLabels(ctx context.Context, client *github.Client, owner, repo string, issueNumber int, addLabel string, removeLabels []string, reason string) {
 	if client == nil {
 		return
 	}
+	log.Printf("Adjusting labels for issue #%d in %s/%s: add='%s', remove=%v (reason: %s)", issueNumber, owner, repo, addLabel, removeLabels, reason)
 	// Fetch the issue first to get current labels and avoid redundant API calls
 	issue, _, err := client.Issues.Get(ctx, owner, repo, issueNumber)
 	if err != nil {
-		log.Printf("Warning: failed to fetch issue %d for label adjustment: %v", issueNumber, err)
+		log.Printf("Warning: failed to fetch issue %d in %s/%s for label adjustment: %v", issueNumber, owner, repo, err)
 		return
 	}
 
@@ -1825,17 +1840,19 @@ func adjustIssueLabels(ctx context.Context, client *github.Client, owner, repo s
 
 	// Remove labels that shouldn't be there
 	for _, r := range existingRemoveLabels {
+		log.Printf("Removing label '%s' from issue #%d in %s/%s (reason: %s)", r, issueNumber, owner, repo, reason)
 		_, err := client.Issues.RemoveLabelForIssue(ctx, owner, repo, issueNumber, r)
 		if err != nil {
-			log.Printf("Warning: failed to remove label %s from issue %d: %v", r, issueNumber, err)
+			log.Printf("Warning: failed to remove label %s from issue %d in %s/%s: %v", r, issueNumber, owner, repo, err)
 		}
 	}
 
 	// Add the new label if not present
 	if !hasAddLabel && addLabel != "" {
+		log.Printf("Adding label '%s' to issue #%d in %s/%s (reason: %s)", addLabel, issueNumber, owner, repo, reason)
 		_, _, err := client.Issues.AddLabelsToIssue(ctx, owner, repo, issueNumber, []string{addLabel})
 		if err != nil {
-			log.Printf("Warning: failed to add label %s to issue %d: %v", addLabel, issueNumber, err)
+			log.Printf("Warning: failed to add label %s to issue %d in %s/%s: %v", addLabel, issueNumber, owner, repo, err)
 		}
 	}
 }
