@@ -40,12 +40,18 @@ func NewCache() *Cache {
 	}
 }
 
-// Update adds or updates a container status in the cache.
+// Update adds or updates a container status in the cache, preserving existing TokenUsage if not set in the update.
 func (c *Cache) Update(id string, container *proto.DevcontainerConfig) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if existing, ok := c.containers[id]; ok && existing != nil && container != nil {
+		if container.TokenUsage == nil && existing.TokenUsage != nil {
+			container.TokenUsage = existing.TokenUsage
+		}
+	}
 	c.containers[id] = container
 }
+
 
 // SetManual marks a container ID as manually requested via API.
 func (c *Cache) SetManual(id string, manual bool) {

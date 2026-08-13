@@ -590,3 +590,81 @@ func TestDown_Success(t *testing.T) {
 	}
 }
 
+func TestTokenUsageSerializationAndServerResponses(t *testing.T) {
+	cache := NewCache()
+	srv := NewServer(cache, nil)
+
+	tokenUsage := &proto.TokenUsage{
+		TotalTokens:   15420,
+		Status:        proto.ExtractionStatus_EXTRACTION_SUCCESS,
+		FailureReason: "",
+	}
+
+	container := &proto.DevcontainerConfig{
+		Id:         "token-container",
+		State:      proto.State_DCM_READY,
+		TokenUsage: tokenUsage,
+	}
+
+	cache.Update("token-container", container)
+
+	// Verify retrieval from cache preserves TokenUsage
+	retrieved, ok := cache.Get("token-container")
+	if !ok {
+		t.Fatalf("expected container 'token-container' in cache")
+	}
+
+	if retrieved.GetTokenUsage() == nil {
+		t.Fatalf("expected non-nil TokenUsage")
+	}
+
+	if retrieved.GetTokenUsage().GetTotalTokens() != 15420 {
+		t.Errorf("expected TotalTokens 15420, got %d", retrieved.GetTokenUsage().GetTotalTokens())
+	}
+
+	if retrieved.GetTokenUsage().GetStatus() != proto.ExtractionStatus_EXTRACTION_SUCCESS {
+		t.Errorf("expected status EXTRACTION_SUCCESS, got %v", retrieved.GetTokenUsage().GetStatus())
+	}
+
+	// Verify gRPC List RPC includes TokenUsage
+	resp, err := srv.List(context.Background(), &proto.ListRequest{})
+	if err != nil {
+		t.Fatalf("unexpected error from List: %v", err)
+	}
+
+	if len(resp.GetConfigs()) != 1 {
+		t.Fatalf("expected 1 config, got %d", len(resp.GetConfigs()))
+	}
+
+	config := resp.GetConfigs()[0]
+	if config.GetTokenUsage() == nil {
+		t.Fatalf("expected non-nil TokenUsage in List RPC response")
+	}
+
+	if config.GetTokenUsage().GetTotalTokens() != 15420 {
+		t.Errorf("expected TotalTokens 15420 in List RPC response, got %d", config.GetTokenUsage().GetTotalTokens())
+	}
+
+	if config.GetTokenUsage().GetStatus() != proto.ExtractionStatus_EXTRACTION_SUCCESS {
+		t.Errorf("expected status EXTRACTION_SUCCESS in List RPC response, got %v", config.GetTokenUsage().GetStatus())
+	}
+
+	// Test update with nil TokenUsage preserving existing TokenUsage in cache
+	updatedNilTokenUsage := &proto.DevcontainerConfig{
+		Id:    "token-container",
+		State: proto.State_DCM_READY,
+	}
+	cache.Update("token-container", updatedNilTokenUsage)
+
+	retrievedNilUpdate, ok := cache.Get("token-container")
+	if !ok || retrievedNilUpdate.GetTokenUsage() == nil {
+		t.Fatalf("expected cached TokenUsage to be preserved after update with nil TokenUsage")
+	}
+
+	if retrievedNilUpdate.GetTokenUsage().GetTotalTokens() != 15420 {
+		t.Errorf("expected preserved TotalTokens 15420, got %d", retrievedNilUpdate.GetTokenUsage().GetTotalTokens())
+	}
+}
+
+
+
