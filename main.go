@@ -659,12 +659,12 @@ func run(ctx context.Context, cfg *config) error {
 
 							if !isIssueRunning {
 								log.Printf("Discovered new issue #%d labeled 'seraphine' in %s. Provisioning container...", issueNumber, repo)
-								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-creating", []string{"container-ready", "container-failed"}, "provisioning container for issue")
+								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-creating", []string{"container-ready", "container-failed", "container-asleep"}, "provisioning container for issue")
 
 								slug, err := deriveFeatureSlug(issue.GetTitle())
 								if err != nil {
 									log.Printf("Failed to derive branch slug for issue %d: %v", issueNumber, err)
-									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"}, fmt.Sprintf("failed to derive branch slug: %v", err))
+									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready", "container-asleep"}, fmt.Sprintf("failed to derive branch slug: %v", err))
 									go reportStartupFailure(ctx, client, owner, repoName, "", issueNumber, err, "")
 									continue
 								}
@@ -673,7 +673,7 @@ func run(ctx context.Context, cfg *config) error {
 								err = ensureIssueBranchExists(ctx, client, owner, repoName, branchName)
 								if err != nil {
 									log.Printf("Failed to ensure issue branch %s exists: %v", branchName, err)
-									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"}, fmt.Sprintf("failed to ensure issue branch %s exists: %v", branchName, err))
+									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready", "container-asleep"}, fmt.Sprintf("failed to ensure issue branch %s exists: %v", branchName, err))
 									go reportStartupFailure(ctx, client, owner, repoName, branchName, issueNumber, err, "")
 									continue
 								}
@@ -706,7 +706,7 @@ func run(ctx context.Context, cfg *config) error {
 									}
 									// Ensure the failed status remains in the cache for dashboard visibility despite the container deletion
 									globalCache.Update(containerID, container)
-									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"}, fmt.Sprintf("devpod up failed: %v", err))
+									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready", "container-asleep"}, fmt.Sprintf("devpod up failed: %v", err))
 									go reportStartupFailure(ctx, client, owner, repoName, branchName, issueNumber, err, string(out))
 								} else {
 									container.State = proto.State_DCM_READY
@@ -715,7 +715,7 @@ func run(ctx context.Context, cfg *config) error {
 									running[containerID] = true
 									stateMu.Unlock()
 
-									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-ready", []string{"container-creating", "container-failed"}, "devpod up succeeded")
+									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-ready", []string{"container-creating", "container-failed", "container-asleep"}, "devpod up succeeded")
 
 									if issue.CreatedAt != nil {
 										wg.Add(1)
@@ -741,7 +741,7 @@ func run(ctx context.Context, cfg *config) error {
 											globalCache.Update(cid, container)
 
 											if client != nil && owner != "" && repoName != "" && iNum > 0 {
-												adjustIssueLabels(ctx, client, owner, repoName, iNum, "container-failed", []string{"container-creating", "container-ready"}, fmt.Sprintf("startup command injection failed: %v", err))
+												adjustIssueLabels(ctx, client, owner, repoName, iNum, "container-failed", []string{"container-creating", "container-ready", "container-asleep"}, fmt.Sprintf("startup command injection failed: %v", err))
 											}
 											if delErr := deleteContainer(repo, cid); delErr != nil {
 												logWithPrefix(repo, "Warning: failed to delete failed devcontainer %s: %v", cid, delErr)
@@ -812,9 +812,12 @@ func run(ctx context.Context, cfg *config) error {
 		if errList == nil {
 			// 1. Hibernation Logic
 			type issueContainer struct {
-				id        string
-				repo      string
-				updatedAt time.Time
+				id          string
+				repo        string
+				owner       string
+				repoName    string
+				issueNumber int
+				updatedAt   time.Time
 			}
 			var runningIssues []issueContainer
 
@@ -842,9 +845,12 @@ func run(ctx context.Context, cfg *config) error {
 						issue, _, errGet := client.Issues.Get(ctx, owner, repoName, issueNumber)
 						if errGet == nil {
 							runningIssues = append(runningIssues, issueContainer{
-								id:        id,
-								repo:      repo,
-								updatedAt: issue.GetUpdatedAt().Time,
+								id:          id,
+								repo:        repo,
+								owner:       owner,
+								repoName:    repoName,
+								issueNumber: issueNumber,
+								updatedAt:   issue.GetUpdatedAt().Time,
 							})
 						} else {
 							log.Printf("Debug: Skipping devpod %s: Failed to get issue %d from %s: %v", id, issueNumber, repo, errGet)
@@ -864,6 +870,10 @@ func run(ctx context.Context, cfg *config) error {
 					errStop := stopContainer(cRepo, runningIssues[i].id)
 					if errStop != nil {
 						logWithPrefix(cRepo, "Warning: failed to stop container %s during hibernation: %v", runningIssues[i].id, errStop)
+					}
+					if client != nil && runningIssues[i].owner != "" && runningIssues[i].repoName != "" && runningIssues[i].issueNumber > 0 {
+						// Mark issue container as asleep when hibernating to satisfy maximum concurrent running container limit.
+						adjustIssueLabels(ctx, client, runningIssues[i].owner, runningIssues[i].repoName, runningIssues[i].issueNumber, "container-asleep", []string{"container-creating", "container-ready", "container-failed"}, "hibernating issue container")
 					}
 				}
 			}
@@ -1005,7 +1015,7 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 	client, _ := gitHubClientProvider()
 
 	if client != nil && owner != "" && repoName != "" && issueNum > 0 {
-		adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-creating", []string{"container-ready", "container-failed"}, "manual container launch initiated")
+		adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-creating", []string{"container-ready", "container-failed", "container-asleep"}, "manual container launch initiated")
 	}
 
 	// Execute container provisioning logic
@@ -1014,9 +1024,9 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 
 	if client != nil && owner != "" && repoName != "" && issueNum > 0 {
 		if err != nil {
-			adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-failed", []string{"container-creating", "container-ready"}, fmt.Sprintf("manual container devpod up failed: %v", err))
+			adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-failed", []string{"container-creating", "container-ready", "container-asleep"}, fmt.Sprintf("manual container devpod up failed: %v", err))
 		} else {
-			adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-ready", []string{"container-creating", "container-failed"}, "manual container devpod up succeeded")
+			adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-ready", []string{"container-creating", "container-failed", "container-asleep"}, "manual container devpod up succeeded")
 		}
 	}
 
@@ -1072,7 +1082,7 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 					globalCache.Update(cid, config)
 
 					if client != nil && owner != "" && repoName != "" && issueNum > 0 {
-						adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-failed", []string{"container-creating", "container-ready"}, fmt.Sprintf("startup command injection failed: %v", err))
+						adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-failed", []string{"container-creating", "container-ready", "container-asleep"}, fmt.Sprintf("startup command injection failed: %v", err))
 					}
 					if delErr := deleteContainer(req.GetRepo(), cid); delErr != nil {
 						logWithPrefix(cid, "Warning: failed to delete failed devcontainer %s: %v", cid, delErr)
