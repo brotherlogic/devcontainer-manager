@@ -1108,7 +1108,114 @@ func stopContainer(repo, id string) error {
 	return nil
 }
 
+func extractTokenUsage(ctx context.Context, repo, containerID string) *proto.TokenUsage {
+	out, err := runCommandWithLog(repo, devpodExe, "ssh", containerID, "--command", "cat /tmp/token_usage.json")
+	if err != nil {
+		return &proto.TokenUsage{
+			Status:        proto.ExtractionStatus_EXTRACTION_FAILED,
+			FailureReason: err.Error(),
+		}
+	}
+
+	var data struct {
+		TotalTokens int64 `json:"total_tokens"`
+	}
+	if jsonErr := json.Unmarshal(out, &data); jsonErr == nil && data.TotalTokens > 0 {
+		return &proto.TokenUsage{
+			TotalTokens: data.TotalTokens,
+			Status:      proto.ExtractionStatus_EXTRACTION_SUCCESS,
+		}
+	}
+
+	if val, parseErr := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64); parseErr == nil {
+		return &proto.TokenUsage{
+			TotalTokens: val,
+			Status:      proto.ExtractionStatus_EXTRACTION_SUCCESS,
+		}
+	}
+
+	return &proto.TokenUsage{
+		Status:        proto.ExtractionStatus_EXTRACTION_FAILED,
+		FailureReason: fmt.Sprintf("failed to parse token usage output: %s", string(out)),
+	}
+}
+
+func postTokenUsageReport(ctx context.Context, client *github.Client, owner, repoName string, issueNumber int, containerID string, usage *proto.TokenUsage) error {
+	if client == nil {
+		return fmt.Errorf("github client is nil")
+	}
+
+	statusStr := usage.GetStatus().String()
+	tokensStr := "N/A"
+	if usage.GetStatus() == proto.ExtractionStatus_EXTRACTION_SUCCESS {
+		tokensStr = fmt.Sprintf("%d", usage.GetTotalTokens())
+	}
+	reasonStr := "N/A"
+	if usage.GetFailureReason() != "" {
+		reasonStr = usage.GetFailureReason()
+	}
+
+	body := fmt.Sprintf("### 📊 Devcontainer Closure Token Usage Report\n"+
+		"- **Container ID:** `%s`\n"+
+		"- **Extraction Status:** `%s`\n"+
+		"- **Total Tokens Consumed:** `%s`\n"+
+		"- **Notes / Failure Reason:** `%s`",
+		containerID, statusStr, tokensStr, reasonStr)
+
+	newComment := &github.IssueComment{Body: &body}
+	_, _, err := client.Issues.CreateComment(ctx, owner, repoName, issueNumber, newComment)
+	return err
+}
+
 func deleteContainer(repo, id string) error {
+	ctx := context.Background()
+
+	usage := extractTokenUsage(ctx, repo, id)
+
+	var issueNumber int
+	var owner, repoName string
+
+	if config, ok := globalCache.Get(id); ok {
+		if usage != nil {
+			config.TokenUsage = usage
+			globalCache.Update(id, config)
+		}
+		if req := config.GetRequest(); req != nil {
+			if req.GetRepo() != "" {
+				parts := strings.Split(req.GetRepo(), "/")
+				if len(parts) == 2 {
+					owner = parts[0]
+					repoName = parts[1]
+				}
+			}
+			if req.GetIdentifier() != nil {
+				issueNumber = int(req.GetIdentifier().GetIssueNumber())
+			}
+		}
+	}
+
+	if owner == "" && repo != "" {
+		parts := strings.Split(repo, "/")
+		if len(parts) == 2 {
+			owner = parts[0]
+			repoName = parts[1]
+		}
+	}
+
+	if issueNumber > 0 && owner != "" && repoName != "" {
+		client, err := gitHubClientProvider()
+		if err == nil && client != nil {
+			if commentErr := postTokenUsageReport(ctx, client, owner, repoName, issueNumber, id, usage); commentErr != nil {
+				logWithPrefix(repo, "Warning: failed to post token usage report for issue %d: %v", issueNumber, commentErr)
+			}
+		} else {
+			logWithPrefix(repo, "Warning: could not get GitHub client for token usage comment: %v", err)
+		}
+	} else {
+		logWithPrefix(repo, "Token usage for non-issue container %s: Status=%s, TotalTokens=%d, Reason=%s",
+			id, usage.GetStatus(), usage.GetTotalTokens(), usage.GetFailureReason())
+	}
+
 	deleteOut, err := runCommandWithLog(repo, devpodExe, "delete", id)
 	if err != nil {
 		return fmt.Errorf("%s delete failed: %w (output: %s)", devpodExe, err, string(deleteOut))

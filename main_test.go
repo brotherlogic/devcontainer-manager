@@ -3340,6 +3340,215 @@ func TestAdjustIssueLabels_ReasonLogging(t *testing.T) {
 	}
 }
 
+func TestTokenExtractionAndComment_Success(t *testing.T) {
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	origClientProvider := gitHubClientProvider
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+	defer func() { gitHubClientProvider = origClientProvider }()
+
+	var commentPosted bool
+	var commentBody string
+	var mu sync.Mutex
+
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/385/comments", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			var comment struct {
+				Body string `json:"body"`
+			}
+			json.NewDecoder(r.Body).Decode(&comment)
+			mu.Lock()
+			commentPosted = true
+			commentBody = comment.Body
+			mu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"id": 12345}`)
+			return
+		}
+	})
+
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		if name == devpodExe && len(args) >= 4 && args[0] == "ssh" {
+			return []byte(`{"total_tokens": 15420}`), nil
+		}
+		return []byte("success"), nil
+	}
+
+	containerID := "test-owner-test-repo-385"
+	devConfig := &proto.DevcontainerConfig{
+		Id: containerID,
+		Request: &proto.UpRequest{
+			Repo: "test-owner/test-repo",
+			Identifier: &proto.Identifier{
+				Id: &proto.Identifier_IssueNumber{IssueNumber: 385},
+			},
+		},
+	}
+	globalCache.Update(containerID, devConfig)
+	defer globalCache.Delete(containerID)
+
+	err := deleteContainer("test-owner/test-repo", containerID)
+	if err != nil {
+		t.Fatalf("expected deleteContainer to succeed, got: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !commentPosted {
+		t.Errorf("expected GitHub comment to be posted upon deletion, but it was not")
+	}
+	if !strings.Contains(commentBody, "15420") || !strings.Contains(commentBody, "EXTRACTION_SUCCESS") {
+		t.Errorf("expected comment body to contain total tokens 15420 and EXTRACTION_SUCCESS, got: %q", commentBody)
+	}
+}
+
+func TestTokenExtractionAndComment_ExtractionFailure(t *testing.T) {
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	origClientProvider := gitHubClientProvider
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+	defer func() { gitHubClientProvider = origClientProvider }()
+
+	var commentPosted bool
+	var commentBody string
+	var mu sync.Mutex
+
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/385/comments", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			var comment struct {
+				Body string `json:"body"`
+			}
+			json.NewDecoder(r.Body).Decode(&comment)
+			mu.Lock()
+			commentPosted = true
+			commentBody = comment.Body
+			mu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"id": 12346}`)
+			return
+		}
+	})
+
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		if name == devpodExe && len(args) >= 4 && args[0] == "ssh" {
+			return nil, fmt.Errorf("ssh connection refused")
+		}
+		return []byte("success"), nil
+	}
+
+	containerID := "test-owner-test-repo-385"
+	devConfig := &proto.DevcontainerConfig{
+		Id: containerID,
+		Request: &proto.UpRequest{
+			Repo: "test-owner/test-repo",
+			Identifier: &proto.Identifier{
+				Id: &proto.Identifier_IssueNumber{IssueNumber: 385},
+			},
+		},
+	}
+	globalCache.Update(containerID, devConfig)
+	defer globalCache.Delete(containerID)
+
+	err := deleteContainer("test-owner/test-repo", containerID)
+	if err != nil {
+		t.Fatalf("expected deleteContainer to succeed despite extraction failure, got: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !commentPosted {
+		t.Errorf("expected GitHub comment to be posted with EXTRACTION_FAILED status")
+	}
+	if !strings.Contains(commentBody, "EXTRACTION_FAILED") {
+		t.Errorf("expected comment body to contain EXTRACTION_FAILED, got: %q", commentBody)
+	}
+}
+
+func TestTokenExtractionAndComment_GitHubAPIFailure(t *testing.T) {
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	origClientProvider := gitHubClientProvider
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+	defer func() { gitHubClientProvider = origClientProvider }()
+
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/385/comments", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `{"message": "Internal Server Error"}`)
+	})
+
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var deleted bool
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		if name == devpodExe && len(args) >= 4 && args[0] == "ssh" {
+			return []byte(`{"total_tokens": 1000}`), nil
+		}
+		if name == devpodExe && len(args) >= 2 && args[0] == "delete" {
+			deleted = true
+		}
+		return []byte("success"), nil
+	}
+
+	containerID := "test-owner-test-repo-385"
+	devConfig := &proto.DevcontainerConfig{
+		Id: containerID,
+		Request: &proto.UpRequest{
+			Repo: "test-owner/test-repo",
+			Identifier: &proto.Identifier{
+				Id: &proto.Identifier_IssueNumber{IssueNumber: 385},
+			},
+		},
+	}
+	globalCache.Update(containerID, devConfig)
+	defer globalCache.Delete(containerID)
+
+	err := deleteContainer("test-owner/test-repo", containerID)
+	if err != nil {
+		t.Fatalf("expected deleteContainer to complete cleanly despite GitHub API failure, got: %v", err)
+	}
+
+	if !deleted {
+		t.Errorf("expected devpod delete to be called despite GitHub API failure")
+	}
+}
+
+
 
 
 
