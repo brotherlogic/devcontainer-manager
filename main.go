@@ -872,6 +872,7 @@ func run(ctx context.Context, cfg *config) error {
 						logWithPrefix(cRepo, "Warning: failed to stop container %s during hibernation: %v", runningIssues[i].id, errStop)
 					}
 					if client != nil && runningIssues[i].owner != "" && runningIssues[i].repoName != "" && runningIssues[i].issueNumber > 0 {
+						// Mark issue container as asleep when hibernating to satisfy maximum concurrent running container limit.
 						adjustIssueLabels(ctx, client, runningIssues[i].owner, runningIssues[i].repoName, runningIssues[i].issueNumber, "container-asleep", []string{"container-creating", "container-ready", "container-failed"}, "hibernating issue container")
 					}
 				}
