@@ -67,6 +67,18 @@ message PushPromptRequest {
 
 message PushPromptResponse {}
 
+enum ExtractionStatus {
+  EXTRACTION_UNSPECIFIED = 0;
+  EXTRACTION_SUCCESS = 1;
+  EXTRACTION_FAILED = 2;
+}
+
+message TokenUsage {
+  int64 total_tokens = 1;
+  ExtractionStatus status = 2;
+  string failure_reason = 3;
+}
+
 message DevcontainerConfig {
   string id = 1; // Unique identifier for this devcontainer request
   UpRequest request = 2; // Original request details
@@ -74,4 +86,6 @@ message DevcontainerConfig {
   string error_message = 4;
   int32 init_retry_count = 5;
   int64 next_retry_time_unix = 6;
+  TokenUsage token_usage = 7;
 }
+
