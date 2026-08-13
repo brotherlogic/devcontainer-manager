@@ -574,6 +574,22 @@ func TestRun_HibernationOfOldestContainers(t *testing.T) {
 		fmt.Fprint(w, `[]`)
 	})
 
+	var addedLabels []string
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/1/labels", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			var labels []string
+			json.NewDecoder(r.Body).Decode(&labels)
+			addedLabels = append(addedLabels, labels...)
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `[]`)
+		}
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/1/labels/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+
 	cfg := &config{
 		once:               true,
 		containerList:      tmpFile.Name(),
@@ -595,6 +611,17 @@ func TestRun_HibernationOfOldestContainers(t *testing.T) {
 
 	if !stopCommandCalledForIssue1 {
 		t.Error("expected devpod stop to be called for the oldest container (issue 1) to satisfy hibernation limits, but it was not")
+	}
+
+	var hasContainerAsleep bool
+	for _, l := range addedLabels {
+		if l == "container-asleep" {
+			hasContainerAsleep = true
+			break
+		}
+	}
+	if !hasContainerAsleep {
+		t.Errorf("expected label 'container-asleep' to be added for hibernated issue 1, got added labels: %v", addedLabels)
 	}
 }
 
