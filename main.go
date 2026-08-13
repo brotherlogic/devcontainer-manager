@@ -1098,13 +1098,13 @@ func stopContainer(repo, id string) error {
 	return nil
 }
 
-func extractTokenUsage(ctx context.Context, repo, containerID string) (*proto.TokenUsage, error) {
+func extractTokenUsage(ctx context.Context, repo, containerID string) *proto.TokenUsage {
 	out, err := runCommandWithLog(repo, devpodExe, "ssh", containerID, "--command", "cat /tmp/token_usage.json")
 	if err != nil {
 		return &proto.TokenUsage{
 			Status:        proto.ExtractionStatus_EXTRACTION_FAILED,
 			FailureReason: err.Error(),
-		}, err
+		}
 	}
 
 	var data struct {
@@ -1114,20 +1114,20 @@ func extractTokenUsage(ctx context.Context, repo, containerID string) (*proto.To
 		return &proto.TokenUsage{
 			TotalTokens: data.TotalTokens,
 			Status:      proto.ExtractionStatus_EXTRACTION_SUCCESS,
-		}, nil
+		}
 	}
 
 	if val, parseErr := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64); parseErr == nil {
 		return &proto.TokenUsage{
 			TotalTokens: val,
 			Status:      proto.ExtractionStatus_EXTRACTION_SUCCESS,
-		}, nil
+		}
 	}
 
 	return &proto.TokenUsage{
 		Status:        proto.ExtractionStatus_EXTRACTION_FAILED,
 		FailureReason: fmt.Sprintf("failed to parse token usage output: %s", string(out)),
-	}, fmt.Errorf("failed to parse token usage output: %s", string(out))
+	}
 }
 
 func postTokenUsageReport(ctx context.Context, client *github.Client, owner, repoName string, issueNumber int, containerID string, usage *proto.TokenUsage) error {
@@ -1160,7 +1160,7 @@ func postTokenUsageReport(ctx context.Context, client *github.Client, owner, rep
 func deleteContainer(repo, id string) error {
 	ctx := context.Background()
 
-	usage, _ := extractTokenUsage(ctx, repo, id)
+	usage := extractTokenUsage(ctx, repo, id)
 
 	var issueNumber int
 	var owner, repoName string
@@ -1180,15 +1180,6 @@ func deleteContainer(repo, id string) error {
 			}
 			if req.GetIdentifier() != nil {
 				issueNumber = int(req.GetIdentifier().GetIssueNumber())
-			}
-		}
-	}
-
-	if issueNumber == 0 {
-		lastIdx := strings.LastIndex(id, "-")
-		if lastIdx != -1 {
-			if num, err := strconv.Atoi(id[lastIdx+1:]); err == nil {
-				issueNumber = num
 			}
 		}
 	}
