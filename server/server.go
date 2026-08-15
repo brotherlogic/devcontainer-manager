@@ -29,20 +29,52 @@ var defaultCommandRunner CommandRunner = func(name string, args ...string) ([]by
 type Cache struct {
 	mu         sync.RWMutex
 	containers map[string]*proto.DevcontainerConfig
+	manualIDs  map[string]bool
 }
 
 // NewCache creates and initializes a new Cache.
 func NewCache() *Cache {
 	return &Cache{
 		containers: make(map[string]*proto.DevcontainerConfig),
+		manualIDs:  make(map[string]bool),
 	}
 }
 
-// Update adds or updates a container status in the cache.
+// Update adds or updates a container status in the cache, preserving existing TokenUsage if not set in the update.
 func (c *Cache) Update(id string, container *proto.DevcontainerConfig) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if existing, ok := c.containers[id]; ok && existing != nil && container != nil {
+		if container.TokenUsage == nil && existing.TokenUsage != nil {
+			container.TokenUsage = existing.TokenUsage
+		}
+	}
 	c.containers[id] = container
+}
+
+
+// SetManual marks a container ID as manually requested via API.
+func (c *Cache) SetManual(id string, manual bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.manualIDs == nil {
+		c.manualIDs = make(map[string]bool)
+	}
+	if manual {
+		c.manualIDs[id] = true
+	} else {
+		delete(c.manualIDs, id)
+	}
+}
+
+// IsManual returns true if the container was manually requested via API.
+func (c *Cache) IsManual(id string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.manualIDs == nil {
+		return false
+	}
+	return c.manualIDs[id]
 }
 
 // Delete removes a container status from the cache by its ID.
@@ -50,6 +82,9 @@ func (c *Cache) Delete(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.containers, id)
+	if c.manualIDs != nil {
+		delete(c.manualIDs, id)
+	}
 }
 
 // List returns a slice of all container statuses stored in the cache.
@@ -87,16 +122,27 @@ type Server struct {
 	modelsMu        sync.RWMutex
 	supportedModels map[string]bool
 	commandRunner   CommandRunner
+	onUpReceived    func()
 }
 
 // NewServer creates and initializes a new gRPC server implementation.
 func NewServer(cache *Cache, gitClient GitClient) *Server {
+	if gitClient == nil {
+		log.Printf("WARN: NewServer: gitClient is nil - branch auto-creation in Up will be skipped")
+	} else {
+		log.Printf("NewServer: gitClient is initialized")
+	}
 	return &Server{
 		cache:           cache,
 		gitClient:       gitClient,
 		supportedModels: make(map[string]bool),
 		commandRunner:   defaultCommandRunner,
 	}
+}
+
+// SetOnUpReceived sets a callback function to be executed whenever an Up request is successfully processed.
+func (s *Server) SetOnUpReceived(fn func()) {
+	s.onUpReceived = fn
 }
 
 // SetCommandRunner overrides the command runner for testing purposes.
@@ -250,22 +296,28 @@ func getCleanID(repoURL, branchName string, issueNum int32) string {
 	return strings.TrimSuffix(id, "-")
 }
 
-// Up handles creating/starting a devcontainer workspace request with model validation and branch auto-creation.
+// Up handles creating/starting a devcontainer workspace request with harness validation, model validation, and branch auto-creation.
 func (s *Server) Up(ctx context.Context, req *proto.UpRequest) (*proto.UpResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	// Enforce explicit harness selection (HARNESS_ANTIGRAVITY or HARNESS_PI).
+	if req.GetHarness() == proto.Harness_HARNESS_UNSPECIFIED {
+		return nil, status.Errorf(codes.InvalidArgument, "harness must be explicitly specified (HARNESS_ANTIGRAVITY or HARNESS_PI)")
 	}
 	if req.GetModel() != "" && !s.IsModelSupported(req.GetModel()) {
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported model: %s", req.GetModel())
 	}
 
 	if s.gitClient != nil && req.GetBranch() != "" {
+		log.Printf("Up: checking if branch %q exists in repo %q", req.GetBranch(), req.GetRepo())
 		exists, err := s.gitClient.BranchExists(ctx, req.GetRepo(), req.GetBranch())
 		if err != nil {
 			return nil, err
 		}
 
 		if !exists {
+			log.Printf("Up: branch %q does not exist, attempting to auto-create from default branch", req.GetBranch())
 			defaultBranch, err := s.gitClient.GetDefaultBranch(ctx, req.GetRepo())
 			if err != nil || defaultBranch == "" {
 				defaultBranch = "main"
@@ -275,6 +327,8 @@ func (s *Server) Up(ctx context.Context, req *proto.UpRequest) (*proto.UpRespons
 				return nil, err
 			}
 		}
+	} else {
+		log.Printf("Up: skipping branch auto-creation (gitClient is nil: %v, branch is empty: %v)", s.gitClient == nil, req.GetBranch() == "")
 	}
 
 	var issueNum int32
@@ -288,6 +342,10 @@ func (s *Server) Up(ctx context.Context, req *proto.UpRequest) (*proto.UpRespons
 		State:   proto.State_DCM_RECEIVED,
 	}
 	s.cache.Update(config.Id, config)
+	s.cache.SetManual(config.Id, true)
+	if s.onUpReceived != nil {
+		s.onUpReceived()
+	}
 	return &proto.UpResponse{
 		Config: config,
 	}, nil

@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -56,6 +57,22 @@ func getGHClient() (*github.Client, error) {
 
 var devpodExe = "devpod"
 
+// devpodMutex serializes all DevPod CLI operations across goroutines to prevent read/write race conditions on ~/.devpod/config.yaml.
+var devpodMutex sync.Mutex
+
+func isDevpodCommand(name string) bool {
+	return name == devpodExe || name == "devpod" || name == "devpod-cli"
+}
+
+// runDevpodCommand executes commandRunner with mutex locking when calling devpod CLI commands.
+func runDevpodCommand(name string, args ...string) ([]byte, error) {
+	if isDevpodCommand(name) {
+		devpodMutex.Lock()
+		defer devpodMutex.Unlock()
+	}
+	return commandRunner(name, args...)
+}
+
 func init() {
 	if _, err := exec.LookPath("devpod-cli"); err == nil {
 		devpodExe = "devpod-cli"
@@ -76,7 +93,7 @@ type DevpodWorkspace struct {
 }
 
 func listDevpodWorkspaces() ([]DevpodWorkspace, error) {
-	out, err := commandRunner(devpodExe, "list", "--output", "json")
+	out, err := runDevpodCommand(devpodExe, "list", "--output", "json")
 	if err != nil {
 		return nil, err
 	}
@@ -118,11 +135,12 @@ var gitHubClientProvider = getGHClient
 
 var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, owner, repoName string) ([]*github.Issue, error) {
 	repoPath := fmt.Sprintf("%s/%s", owner, repoName)
-	out, err := commandRunner("gh", "issue", "list", "-R", repoPath, "--state", "open", "--json", "number,title,labels,assignees")
+	out, err := commandRunner("gh", "issue", "list", "-R", repoPath, "--state", "open", "--json", "number,title,labels,assignees,body")
 	if err == nil {
 		var rawIssues []struct {
 			Number int    `json:"number"`
 			Title  string `json:"title"`
+			Body   string `json:"body"`
 			Labels []struct {
 				Name string `json:"name"`
 			} `json:"labels"`
@@ -135,6 +153,7 @@ var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, ow
 			for _, raw := range rawIssues {
 				num := raw.Number
 				title := raw.Title
+				body := raw.Body
 				var labels []*github.Label
 				for _, lbl := range raw.Labels {
 					name := lbl.Name
@@ -156,6 +175,7 @@ var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, ow
 				issues = append(issues, &github.Issue{
 					Number:    &num,
 					Title:     &title,
+					Body:      &body,
 					Labels:    labels,
 					Assignee:  assignee,
 					Assignees: assignees,
@@ -186,6 +206,7 @@ var (
 
 // We live dangerously
 const (
+	agyInteractivePrefix       = "agy --dangerously-skip-permissions --prompt-interactive"
 	defaultIssueStartupCommand = `agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of this issue - if the label matches any of the workflows in the brotherlogic/seraphine project's .agent/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`
 	defaultBranchRef           = ""
 	DevpodLabelPrefix          = "sh.loft.devpod.workspace.id="
@@ -208,13 +229,99 @@ func initCache() *server.Cache {
 	return globalCache
 }
 
+// parseOwnerRepo extracts the repository owner and name from various Git URL formats
+// (e.g. SSH URLs, HTTP URLs, owner/repo strings, or branch-suffixed URLs).
+func parseOwnerRepo(repoStr string) (string, string, error) {
+	s := repoStr
+	s = strings.TrimPrefix(s, "git@")
+	s = strings.TrimSuffix(s, ".git")
+	if idx := strings.Index(s, "@"); idx != -1 {
+		s = s[:idx]
+	}
+	if idx := strings.Index(s, ":"); idx != -1 {
+		s = s[idx+1:]
+	}
+	if u, err := url.Parse(s); err == nil && u.Path != "" {
+		s = u.Path
+	}
+	s = strings.TrimPrefix(s, "/")
+	// Strip subpaths like /issues/, /pull/, /discussions/ if present
+	for _, subpath := range []string{"/issues/", "/pull/", "/discussions/"} {
+		if idx := strings.Index(s, subpath); idx != -1 {
+			s = s[:idx]
+		}
+	}
+	parts := strings.Split(s, "/")
+	if len(parts) >= 2 {
+		return parts[len(parts)-2], parts[len(parts)-1], nil
+	}
+	return "", "", fmt.Errorf("invalid repo string: %s", repoStr)
+}
+
+type ghGitClient struct{}
+
+func (g *ghGitClient) BranchExists(ctx context.Context, repo, branch string) (bool, error) {
+	owner, repoName, err := parseOwnerRepo(repo)
+	if err != nil {
+		return false, err
+	}
+	client, err := gitHubClientProvider()
+	if err != nil {
+		return false, err
+	}
+	_, _, err = client.Repositories.GetBranch(ctx, owner, repoName, branch, false)
+	if err == nil {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (g *ghGitClient) CreateBranch(ctx context.Context, repo, newBranch, baseBranch string) error {
+	owner, repoName, err := parseOwnerRepo(repo)
+	if err != nil {
+		return err
+	}
+	client, err := gitHubClientProvider()
+	if err != nil {
+		return err
+	}
+	return ensureIssueBranchExists(ctx, client, owner, repoName, newBranch)
+}
+
+func (g *ghGitClient) GetDefaultBranch(ctx context.Context, repo string) (string, error) {
+	owner, repoName, err := parseOwnerRepo(repo)
+	if err != nil {
+		return "main", err
+	}
+	client, err := gitHubClientProvider()
+	if err != nil {
+		return "main", err
+	}
+	r, _, err := client.Repositories.Get(ctx, owner, repoName)
+	if err != nil {
+		return "main", err
+	}
+	return r.GetDefaultBranch(), nil
+}
+
+var triggerRunChan = make(chan struct{}, 1)
+
+func triggerRunLoop() {
+	select {
+	case triggerRunChan <- struct{}{}:
+	default:
+	}
+}
+
 func startGRPCServer(port int, cache *server.Cache) (*grpc.Server, error) {
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen: %w", err)
 	}
 	s := grpc.NewServer()
-	proto.RegisterManagerServiceServer(s, server.NewServer(cache, nil))
+	srv := server.NewServer(cache, &ghGitClient{})
+	srv.SetOnUpReceived(triggerRunLoop)
+	proto.RegisterManagerServiceServer(s, srv)
 	go func() {
 		if err := s.Serve(lis); err != nil {
 			log.Printf("gRPC server stopped: %v", err)
@@ -343,7 +450,10 @@ func main() {
 			break
 		}
 
-		time.Sleep(time.Minute * 5)
+		select {
+		case <-triggerRunChan:
+		case <-time.After(time.Minute * 5):
+		}
 	}
 }
 
@@ -396,6 +506,7 @@ func run(ctx context.Context, cfg *config) error {
 
 	for _, c := range globalCache.List() {
 		if c.State == proto.State_DCM_RECEIVED {
+			globalCache.SetManual(c.Id, true)
 			// Update state to DCM_CREATING to lock it
 			c.State = proto.State_DCM_CREATING
 			globalCache.Update(c.Id, c)
@@ -471,7 +582,7 @@ func run(ctx context.Context, cfg *config) error {
 						wg.Add(1)
 						go func(cid string) {
 							defer wg.Done()
-							if err := injectStartupCommand(ctx, repo, cid, cfg.startupCommand); err != nil {
+							if err := injectStartupCommand(ctx, repo, cid, cfg.startupCommand, proto.Harness_HARNESS_ANTIGRAVITY); err != nil {
 								logWithPrefix(repo, "ERROR: Failed to inject startup command for container %s: %v", cid, err)
 							}
 						}(id)
@@ -548,12 +659,12 @@ func run(ctx context.Context, cfg *config) error {
 
 							if !isIssueRunning {
 								log.Printf("Discovered new issue #%d labeled 'seraphine' in %s. Provisioning container...", issueNumber, repo)
-								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-creating", []string{"container-ready", "container-failed"})
+								adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-creating", []string{"container-ready", "container-failed", "container-asleep"}, "provisioning container for issue")
 
 								slug, err := deriveFeatureSlug(issue.GetTitle())
 								if err != nil {
 									log.Printf("Failed to derive branch slug for issue %d: %v", issueNumber, err)
-									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
+									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready", "container-asleep"}, fmt.Sprintf("failed to derive branch slug: %v", err))
 									go reportStartupFailure(ctx, client, owner, repoName, "", issueNumber, err, "")
 									continue
 								}
@@ -562,7 +673,7 @@ func run(ctx context.Context, cfg *config) error {
 								err = ensureIssueBranchExists(ctx, client, owner, repoName, branchName)
 								if err != nil {
 									log.Printf("Failed to ensure issue branch %s exists: %v", branchName, err)
-									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
+									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready", "container-asleep"}, fmt.Sprintf("failed to ensure issue branch %s exists: %v", branchName, err))
 									go reportStartupFailure(ctx, client, owner, repoName, branchName, issueNumber, err, "")
 									continue
 								}
@@ -595,7 +706,7 @@ func run(ctx context.Context, cfg *config) error {
 									}
 									// Ensure the failed status remains in the cache for dashboard visibility despite the container deletion
 									globalCache.Update(containerID, container)
-									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready"})
+									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-failed", []string{"container-creating", "container-ready", "container-asleep"}, fmt.Sprintf("devpod up failed: %v", err))
 									go reportStartupFailure(ctx, client, owner, repoName, branchName, issueNumber, err, string(out))
 								} else {
 									container.State = proto.State_DCM_READY
@@ -604,7 +715,7 @@ func run(ctx context.Context, cfg *config) error {
 									running[containerID] = true
 									stateMu.Unlock()
 
-									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-ready", []string{"container-creating", "container-failed"})
+									adjustIssueLabels(ctx, client, owner, repoName, issueNumber, "container-ready", []string{"container-creating", "container-failed", "container-asleep"}, "devpod up succeeded")
 
 									if issue.CreatedAt != nil {
 										wg.Add(1)
@@ -621,12 +732,26 @@ func run(ctx context.Context, cfg *config) error {
 										cmdToInject = fmt.Sprintf(`agy --dangerously-skip-permissions --prompt-interactive "Take a look at the status of issue #%d - if the label matches any of the workflows in the brotherlogic/seraphine project's .agent/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`, issueNumber)
 									}
 									wg.Add(1)
-									go func(cid string) {
+									go func(cid string, iNum int, bName string) {
 										defer wg.Done()
-										if err := injectStartupCommand(ctx, repo, cid, cmdToInject); err != nil {
+										if err := injectStartupCommand(ctx, repo, cid, cmdToInject, proto.Harness_HARNESS_ANTIGRAVITY); err != nil {
 											logWithPrefix(repo, "ERROR: Failed to inject startup command for container %s: %v", cid, err)
+											container.State = proto.State_DCM_FAILED
+											container.ErrorMessage = err.Error()
+											globalCache.Update(cid, container)
+
+											if client != nil && owner != "" && repoName != "" && iNum > 0 {
+												adjustIssueLabels(ctx, client, owner, repoName, iNum, "container-failed", []string{"container-creating", "container-ready", "container-asleep"}, fmt.Sprintf("startup command injection failed: %v", err))
+											}
+											if delErr := deleteContainer(repo, cid); delErr != nil {
+												logWithPrefix(repo, "Warning: failed to delete failed devcontainer %s: %v", cid, delErr)
+											}
+											globalCache.Update(cid, container)
+											if client != nil && owner != "" && repoName != "" {
+												go reportStartupFailure(ctx, client, owner, repoName, bName, iNum, err, "")
+											}
 										}
-									}(containerID)
+									}(containerID, issueNumber, branchName)
 
 									compositeSHA, found, err := getRepoCompositeSHA(ctx, client, repo, branchName)
 									if err == nil && found {
@@ -687,9 +812,12 @@ func run(ctx context.Context, cfg *config) error {
 		if errList == nil {
 			// 1. Hibernation Logic
 			type issueContainer struct {
-				id        string
-				repo      string
-				updatedAt time.Time
+				id          string
+				repo        string
+				owner       string
+				repoName    string
+				issueNumber int
+				updatedAt   time.Time
 			}
 			var runningIssues []issueContainer
 
@@ -717,9 +845,12 @@ func run(ctx context.Context, cfg *config) error {
 						issue, _, errGet := client.Issues.Get(ctx, owner, repoName, issueNumber)
 						if errGet == nil {
 							runningIssues = append(runningIssues, issueContainer{
-								id:        id,
-								repo:      repo,
-								updatedAt: issue.GetUpdatedAt().Time,
+								id:          id,
+								repo:        repo,
+								owner:       owner,
+								repoName:    repoName,
+								issueNumber: issueNumber,
+								updatedAt:   issue.GetUpdatedAt().Time,
 							})
 						} else {
 							log.Printf("Debug: Skipping devpod %s: Failed to get issue %d from %s: %v", id, issueNumber, repo, errGet)
@@ -739,6 +870,10 @@ func run(ctx context.Context, cfg *config) error {
 					errStop := stopContainer(cRepo, runningIssues[i].id)
 					if errStop != nil {
 						logWithPrefix(cRepo, "Warning: failed to stop container %s during hibernation: %v", runningIssues[i].id, errStop)
+					}
+					if client != nil && runningIssues[i].owner != "" && runningIssues[i].repoName != "" && runningIssues[i].issueNumber > 0 {
+						// Mark issue container as asleep when hibernating to satisfy maximum concurrent running container limit.
+						adjustIssueLabels(ctx, client, runningIssues[i].owner, runningIssues[i].repoName, runningIssues[i].issueNumber, "container-asleep", []string{"container-creating", "container-ready", "container-failed"}, "hibernating issue container")
 					}
 				}
 			}
@@ -761,7 +896,7 @@ func run(ctx context.Context, cfg *config) error {
 							if errGet == nil {
 								if issue.GetState() == "closed" {
 									shouldCleanup = true
-								} else {
+								} else if !globalCache.IsManual(id) {
 									hasSeraphineLabel := false
 									for _, label := range issue.Labels {
 										if strings.HasPrefix(label.GetName(), "seraphine") {
@@ -818,7 +953,7 @@ func run(ctx context.Context, cfg *config) error {
 				isHTTPSource := errURL == nil && (u.Scheme == "http" || u.Scheme == "https")
 
 				// Check (a): Not in the container list (accounting for issues)
-				inList := validProjectNames[cName] || validIssueContainers[cName]
+				inList := validProjectNames[cName] || validIssueContainers[cName] || globalCache.IsManual(cName)
 
 				if !inList || isHTTPSource {
 					cRepo := getRepoForID(cName, projectRepoMap)
@@ -860,16 +995,41 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 	if idx := strings.Index(repoURL, "/issues/"); idx != -1 {
 		repoURL = repoURL[:idx]
 	}
-	if !strings.HasPrefix(repoURL, "git@") && !strings.HasPrefix(repoURL, "http://") && !strings.HasPrefix(repoURL, "https://") {
+	repoURL = strings.TrimPrefix(repoURL, "https://github.com/")
+	repoURL = strings.TrimPrefix(repoURL, "http://github.com/")
+	if idx := strings.Index(repoURL, "github.com:"); idx != -1 {
+		repoURL = repoURL[idx+len("github.com:"):]
+	}
+	if !strings.HasPrefix(repoURL, "git@") {
 		repoURL = fmt.Sprintf("git@github.com:%s", repoURL)
 	}
 	if req.GetBranch() != "" && !strings.HasSuffix(repoURL, "@"+req.GetBranch()) {
 		repoURL = fmt.Sprintf("%s@%s", repoURL, req.GetBranch())
 	}
 
+	owner, repoName, _ := parseOwnerRepo(req.GetRepo())
+	var issueNum int
+	if req.GetIdentifier() != nil && req.GetIdentifier().GetIssueNumber() > 0 {
+		issueNum = int(req.GetIdentifier().GetIssueNumber())
+	}
+	client, _ := gitHubClientProvider()
+
+	if client != nil && owner != "" && repoName != "" && issueNum > 0 {
+		adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-creating", []string{"container-ready", "container-failed", "container-asleep"}, "manual container launch initiated")
+	}
+
 	// Execute container provisioning logic
 	logWithPrefix(config.Id, "Manually launching container %s on repo %s", config.Id, repoURL)
 	out, err := runCommandWithLog(config.Id, devpodExe, "up", repoURL, "--id", config.Id, "--ide", "none")
+
+	if client != nil && owner != "" && repoName != "" && issueNum > 0 {
+		if err != nil {
+			adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-failed", []string{"container-creating", "container-ready", "container-asleep"}, fmt.Sprintf("manual container devpod up failed: %v", err))
+		} else {
+			adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-ready", []string{"container-creating", "container-failed", "container-asleep"}, "manual container devpod up succeeded")
+		}
+	}
+
 	if err != nil {
 		logWithPrefix(config.Id, "Failed to manually launch devcontainer: %v (output: %s)", err, string(out))
 		config.State = proto.State_DCM_FAILED
@@ -880,6 +1040,10 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 		if delErr := deleteContainer(req.GetRepo(), config.Id); delErr != nil {
 			logWithPrefix(config.Id, "Warning: failed to delete failed devcontainer %s: %v", config.Id, delErr)
 		}
+
+		if client != nil && owner != "" && repoName != "" {
+			go reportStartupFailure(ctx, client, owner, repoName, req.GetBranch(), issueNum, err, string(out))
+		}
 	} else {
 		config.State = proto.State_DCM_READY
 		globalCache.Update(config.Id, config)
@@ -887,12 +1051,47 @@ func processManualUpRequest(ctx context.Context, config *proto.DevcontainerConfi
 		renameDockerContainer(config.Id)
 
 		cmdToInject := cfg.startupCommand
+		if req.GetHarness() == proto.Harness_HARNESS_PI {
+			prompt := req.GetPrompt()
+			if prompt == "" {
+				if issueNum > 0 {
+					prompt = fmt.Sprintf("Take a look at the status of issue #%d - if the label matches any of the workflows in the brotherlogic/seraphine project's .agent/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work", issueNum)
+				} else {
+					prompt = "Take a look at the status of this issue - if the label matches any of the workflows in the brotherlogic/seraphine project's .agent/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"
+				}
+			}
+			cmdToInject = fmt.Sprintf("pi --prompt %s", shellQuote(prompt))
+		} else if req.GetPrompt() != "" {
+			cmdToInject = fmt.Sprintf("%s %s", agyInteractivePrefix, shellQuote(req.GetPrompt()))
+		} else if cmdToInject == "" {
+			if issueNum > 0 {
+				cmdToInject = fmt.Sprintf(`%s "Take a look at the status of issue #%d - if the label matches any of the workflows in the brotherlogic/seraphine project's .agent/workflows list then you should follow that workflow. Otherwise just suggest a path forward for the issue - do not undertake any implementation work"`, agyInteractivePrefix, issueNum)
+			} else {
+				cmdToInject = defaultIssueStartupCommand
+			}
+		}
+
 		if cmdToInject != "" {
 			wg.Add(1)
 			go func(cid string) {
 				defer wg.Done()
-				if err := injectStartupCommand(ctx, req.GetRepo(), cid, cmdToInject); err != nil {
+				if err := injectStartupCommand(ctx, req.GetRepo(), cid, cmdToInject, req.GetHarness()); err != nil {
 					logWithPrefix(cid, "ERROR: Failed to inject startup command for container %s: %v", cid, err)
+					config.State = proto.State_DCM_FAILED
+					config.ErrorMessage = err.Error()
+					globalCache.Update(cid, config)
+
+					if client != nil && owner != "" && repoName != "" && issueNum > 0 {
+						adjustIssueLabels(ctx, client, owner, repoName, issueNum, "container-failed", []string{"container-creating", "container-ready", "container-asleep"}, fmt.Sprintf("startup command injection failed: %v", err))
+					}
+					if delErr := deleteContainer(req.GetRepo(), cid); delErr != nil {
+						logWithPrefix(cid, "Warning: failed to delete failed devcontainer %s: %v", cid, delErr)
+					}
+					// Ensure the failed status remains in the cache for dashboard visibility despite the container deletion
+					globalCache.Update(cid, config)
+					if client != nil && owner != "" && repoName != "" {
+						go reportStartupFailure(ctx, client, owner, repoName, req.GetBranch(), issueNum, err, "")
+					}
 				}
 			}(config.Id)
 		}
@@ -909,7 +1108,114 @@ func stopContainer(repo, id string) error {
 	return nil
 }
 
+func extractTokenUsage(ctx context.Context, repo, containerID string) *proto.TokenUsage {
+	out, err := runCommandWithLog(repo, devpodExe, "ssh", containerID, "--command", "cat /tmp/token_usage.json")
+	if err != nil {
+		return &proto.TokenUsage{
+			Status:        proto.ExtractionStatus_EXTRACTION_FAILED,
+			FailureReason: err.Error(),
+		}
+	}
+
+	var data struct {
+		TotalTokens int64 `json:"total_tokens"`
+	}
+	if jsonErr := json.Unmarshal(out, &data); jsonErr == nil && data.TotalTokens > 0 {
+		return &proto.TokenUsage{
+			TotalTokens: data.TotalTokens,
+			Status:      proto.ExtractionStatus_EXTRACTION_SUCCESS,
+		}
+	}
+
+	if val, parseErr := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64); parseErr == nil {
+		return &proto.TokenUsage{
+			TotalTokens: val,
+			Status:      proto.ExtractionStatus_EXTRACTION_SUCCESS,
+		}
+	}
+
+	return &proto.TokenUsage{
+		Status:        proto.ExtractionStatus_EXTRACTION_FAILED,
+		FailureReason: fmt.Sprintf("failed to parse token usage output: %s", string(out)),
+	}
+}
+
+func postTokenUsageReport(ctx context.Context, client *github.Client, owner, repoName string, issueNumber int, containerID string, usage *proto.TokenUsage) error {
+	if client == nil {
+		return fmt.Errorf("github client is nil")
+	}
+
+	statusStr := usage.GetStatus().String()
+	tokensStr := "N/A"
+	if usage.GetStatus() == proto.ExtractionStatus_EXTRACTION_SUCCESS {
+		tokensStr = fmt.Sprintf("%d", usage.GetTotalTokens())
+	}
+	reasonStr := "N/A"
+	if usage.GetFailureReason() != "" {
+		reasonStr = usage.GetFailureReason()
+	}
+
+	body := fmt.Sprintf("### 📊 Devcontainer Closure Token Usage Report\n"+
+		"- **Container ID:** `%s`\n"+
+		"- **Extraction Status:** `%s`\n"+
+		"- **Total Tokens Consumed:** `%s`\n"+
+		"- **Notes / Failure Reason:** `%s`",
+		containerID, statusStr, tokensStr, reasonStr)
+
+	newComment := &github.IssueComment{Body: &body}
+	_, _, err := client.Issues.CreateComment(ctx, owner, repoName, issueNumber, newComment)
+	return err
+}
+
 func deleteContainer(repo, id string) error {
+	ctx := context.Background()
+
+	usage := extractTokenUsage(ctx, repo, id)
+
+	var issueNumber int
+	var owner, repoName string
+
+	if config, ok := globalCache.Get(id); ok {
+		if usage != nil {
+			config.TokenUsage = usage
+			globalCache.Update(id, config)
+		}
+		if req := config.GetRequest(); req != nil {
+			if req.GetRepo() != "" {
+				parts := strings.Split(req.GetRepo(), "/")
+				if len(parts) == 2 {
+					owner = parts[0]
+					repoName = parts[1]
+				}
+			}
+			if req.GetIdentifier() != nil {
+				issueNumber = int(req.GetIdentifier().GetIssueNumber())
+			}
+		}
+	}
+
+	if owner == "" && repo != "" {
+		parts := strings.Split(repo, "/")
+		if len(parts) == 2 {
+			owner = parts[0]
+			repoName = parts[1]
+		}
+	}
+
+	if issueNumber > 0 && owner != "" && repoName != "" {
+		client, err := gitHubClientProvider()
+		if err == nil && client != nil {
+			if commentErr := postTokenUsageReport(ctx, client, owner, repoName, issueNumber, id, usage); commentErr != nil {
+				logWithPrefix(repo, "Warning: failed to post token usage report for issue %d: %v", issueNumber, commentErr)
+			}
+		} else {
+			logWithPrefix(repo, "Warning: could not get GitHub client for token usage comment: %v", err)
+		}
+	} else {
+		logWithPrefix(repo, "Token usage for non-issue container %s: Status=%s, TotalTokens=%d, Reason=%s",
+			id, usage.GetStatus(), usage.GetTotalTokens(), usage.GetFailureReason())
+	}
+
 	deleteOut, err := runCommandWithLog(repo, devpodExe, "delete", id)
 	if err != nil {
 		return fmt.Errorf("%s delete failed: %w (output: %s)", devpodExe, err, string(deleteOut))
@@ -1388,7 +1694,7 @@ func recreateContainer(ctx context.Context, repo string, id string, startupCmd s
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := injectStartupCommand(ctx, repo, id, startupCmd); err != nil {
+			if err := injectStartupCommand(ctx, repo, id, startupCmd, proto.Harness_HARNESS_ANTIGRAVITY); err != nil {
 				logWithPrefix(repo, "ERROR: Failed to inject startup command for container %s: %v", id, err)
 			}
 		}()
@@ -1456,7 +1762,7 @@ func recreateIssueContainer(ctx context.Context, owner, repoName, branchName, co
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := injectStartupCommand(ctx, repo, containerID, cmdToInject); err != nil {
+		if err := injectStartupCommand(ctx, repo, containerID, cmdToInject, proto.Harness_HARNESS_ANTIGRAVITY); err != nil {
 			logWithPrefix(repo, "ERROR: Failed to inject startup command for container %s: %v", containerID, err)
 		}
 	}()
@@ -1467,7 +1773,10 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
-func injectStartupCommand(ctx context.Context, repo string, id string, startupCmd string) error {
+// injectStartupCommand polls a devcontainer tmux session for readiness and injects the specified startup command into tmux.
+// If harness is HARNESS_PI, it checks if `pi` is installed via `command -v pi` and executes the pi.dev installation script if missing.
+// All injected prompt strings and commands are safely quoted using shellQuote to sanitize metacharacters and prevent shell command injection.
+func injectStartupCommand(ctx context.Context, repo string, id string, startupCmd string, harness proto.Harness) error {
 	if startupCmd == "" {
 		return nil
 	}
@@ -1506,7 +1815,22 @@ func injectStartupCommand(ctx context.Context, repo string, id string, startupCm
 			}
 
 			if err == nil {
-				logWithPrefix(repo, "Container %s tmux session %q is ready. Injecting startup command...", id, sessionName)
+				logWithPrefix(repo, "Container %s tmux session %q is ready.", id, sessionName)
+
+				if harness == proto.Harness_HARNESS_PI {
+					logWithPrefix(repo, "Checking if pi is installed in container %s...", id)
+					_, checkErr := runCommandWithLog(repo, devpodExe, "ssh", id, "--command", "command -v pi")
+					if checkErr != nil {
+						logWithPrefix(repo, "pi missing in container %s. Running installation script (pi.dev)...", id)
+						installOut, installErr := runCommandWithLog(repo, devpodExe, "ssh", id, "--command", "curl -fsSL https://pi.dev | sh")
+						if installErr != nil {
+							logWithPrefix(repo, "Failed to install pi in container %s: %v (output: %s)", id, installErr, string(installOut))
+							return fmt.Errorf("failed to install pi: %w (output: %s)", installErr, string(installOut))
+						}
+					}
+				}
+
+				logWithPrefix(repo, "Injecting startup command...")
 				injectOut, injectErr := runCommandWithLog(repo, devpodExe, "ssh", id, "--command", fmt.Sprintf("tmux send-keys -t %s %s C-m", sessionName, shellQuote(startupCmd)))
 				if injectErr != nil {
 					logWithPrefix(repo, "Failed to inject startup command for %s: %v (output: %s)", id, injectErr, string(injectOut))
@@ -1605,14 +1929,15 @@ func ensureIssueBranchExists(ctx context.Context, client *github.Client, owner, 
 	return nil
 }
 
-func adjustIssueLabels(ctx context.Context, client *github.Client, owner, repo string, issueNumber int, addLabel string, removeLabels []string) {
+func adjustIssueLabels(ctx context.Context, client *github.Client, owner, repo string, issueNumber int, addLabel string, removeLabels []string, reason string) {
 	if client == nil {
 		return
 	}
+	log.Printf("Adjusting labels for issue #%d in %s/%s: add='%s', remove=%v (reason: %s)", issueNumber, owner, repo, addLabel, removeLabels, reason)
 	// Fetch the issue first to get current labels and avoid redundant API calls
 	issue, _, err := client.Issues.Get(ctx, owner, repo, issueNumber)
 	if err != nil {
-		log.Printf("Warning: failed to fetch issue %d for label adjustment: %v", issueNumber, err)
+		log.Printf("Warning: failed to fetch issue %d in %s/%s for label adjustment: %v", issueNumber, owner, repo, err)
 		return
 	}
 
@@ -1632,17 +1957,19 @@ func adjustIssueLabels(ctx context.Context, client *github.Client, owner, repo s
 
 	// Remove labels that shouldn't be there
 	for _, r := range existingRemoveLabels {
+		log.Printf("Removing label '%s' from issue #%d in %s/%s (reason: %s)", r, issueNumber, owner, repo, reason)
 		_, err := client.Issues.RemoveLabelForIssue(ctx, owner, repo, issueNumber, r)
 		if err != nil {
-			log.Printf("Warning: failed to remove label %s from issue %d: %v", r, issueNumber, err)
+			log.Printf("Warning: failed to remove label %s from issue %d in %s/%s: %v", r, issueNumber, owner, repo, err)
 		}
 	}
 
 	// Add the new label if not present
 	if !hasAddLabel && addLabel != "" {
+		log.Printf("Adding label '%s' to issue #%d in %s/%s (reason: %s)", addLabel, issueNumber, owner, repo, reason)
 		_, _, err := client.Issues.AddLabelsToIssue(ctx, owner, repo, issueNumber, []string{addLabel})
 		if err != nil {
-			log.Printf("Warning: failed to add label %s to issue %d: %v", addLabel, issueNumber, err)
+			log.Printf("Warning: failed to add label %s to issue %d in %s/%s: %v", addLabel, issueNumber, owner, repo, err)
 		}
 	}
 }
@@ -1709,23 +2036,57 @@ func renameDockerContainer(workspaceID string) {
 	}
 }
 
-// No-op change to trigger CI for issue 98
-
+// reportStartupFailure reports startup failure logs back to GitHub issues.
+// It first attempts to write to the target repository using createIssueWithDeduplication,
+// and falls back to writing to brotherlogic/devcontainer-manager if it encounters a permission error.
 func reportStartupFailure(ctx context.Context, client *github.Client, owner, repo, branch string, originalIssueNum int, startupErr error, outputLog string) {
 	if client == nil {
 		return
 	}
 
-	issues, err := listOpenIssuesProvider(ctx, client, owner, repo)
+	err := createIssueWithDeduplication(ctx, client, owner, repo, owner, repo, branch, originalIssueNum, startupErr, outputLog)
 	if err != nil {
-		log.Printf("Warning: failed to list issues for %s/%s during startup failure reporting: %v", owner, repo, err)
-		return
+		isPermissionError := false
+		var errResponse *github.ErrorResponse
+		if errors.As(err, &errResponse) && errResponse.Response != nil {
+			if errResponse.Response.StatusCode == http.StatusForbidden || errResponse.Response.StatusCode == http.StatusNotFound {
+				isPermissionError = true
+			}
+		}
+
+		if isPermissionError {
+			fallbackErr := createIssueWithDeduplication(ctx, client, "brotherlogic", "devcontainer-manager", owner, repo, branch, originalIssueNum, startupErr, outputLog)
+			if fallbackErr != nil {
+				log.Printf("Warning: failed to create startup failure issue in fallback repository brotherlogic/devcontainer-manager: %v", fallbackErr)
+			}
+		} else {
+			log.Printf("Warning: failed to create startup failure issue in %s/%s: %v", owner, repo, err)
+		}
+	}
+}
+
+func createIssueWithDeduplication(ctx context.Context, client *github.Client, destOwner, destRepo, targetOwner, targetRepo, branch string, originalIssueNum int, startupErr error, outputLog string) error {
+	if client == nil {
+		return fmt.Errorf("github client is nil")
+	}
+
+	issues, err := listOpenIssuesProvider(ctx, client, destOwner, destRepo)
+	if err != nil {
+		return fmt.Errorf("failed to list open issues: %w", err)
 	}
 
 	for _, issue := range issues {
 		if issue.GetTitle() == "Issue Container Startup Failed" {
-			log.Printf("An open issue 'Issue Container Startup Failed' already exists in %s/%s. Skipping creation.", owner, repo)
-			return
+			if destRepo == "devcontainer-manager" {
+				targetRef := fmt.Sprintf("**Target Repository:** %s/%s", targetOwner, targetRepo)
+				if strings.Contains(issue.GetBody(), targetRef) {
+					log.Printf("An open issue 'Issue Container Startup Failed' for %s/%s already exists in %s/%s. Skipping creation.", targetOwner, targetRepo, destOwner, destRepo)
+					return nil
+				}
+			} else {
+				log.Printf("An open issue 'Issue Container Startup Failed' already exists in %s/%s. Skipping creation.", destOwner, destRepo)
+				return nil
+			}
 		}
 	}
 
@@ -1735,11 +2096,12 @@ func reportStartupFailure(ctx context.Context, client *github.Client, owner, rep
 	)
 
 	if len(outputLog) > GitHubIssueBodyLimit {
-		outputLog = TruncMsg + outputLog[len(outputLog)-(GitHubIssueBodyLimit-len(TruncMsg)):]
+		outputLog = TruncMsg + outputLog[:GitHubIssueBodyLimit-len(TruncMsg)]
 	}
 
 	var bodyBuilder strings.Builder
 	bodyBuilder.WriteString("### Devcontainer Startup Failure Report\n\n")
+	bodyBuilder.WriteString(fmt.Sprintf("* **Target Repository:** %s/%s\n", targetOwner, targetRepo))
 	bodyBuilder.WriteString(fmt.Sprintf("* **Branch:** `%s`\n", branch))
 	bodyBuilder.WriteString(fmt.Sprintf("* **Original Issue:** #%d\n\n", originalIssueNum))
 	bodyBuilder.WriteString("#### Startup Log / Error Message\n")
@@ -1761,10 +2123,12 @@ func reportStartupFailure(ctx context.Context, client *github.Client, owner, rep
 		Labels: &[]string{"seraphine-bug"},
 	}
 
-	_, _, err = client.Issues.Create(ctx, owner, repo, req)
+	_, _, err = client.Issues.Create(ctx, destOwner, destRepo, req)
 	if err != nil {
-		log.Printf("Warning: failed to create startup failure issue in %s/%s: %v", owner, repo, err)
+		return fmt.Errorf("failed to create issue: %w", err)
 	}
+
+	return nil
 }
 
 func logWithPrefix(repo string, format string, args ...interface{}) {
@@ -1773,7 +2137,7 @@ func logWithPrefix(repo string, format string, args ...interface{}) {
 }
 
 func runCommandWithLog(repo string, name string, args ...string) ([]byte, error) {
-	out, err := commandRunner(name, args...)
+	out, err := runDevpodCommand(name, args...)
 	if len(out) > 0 {
 		for _, line := range strings.Split(string(out), "\n") {
 			if strings.TrimSpace(line) != "" {

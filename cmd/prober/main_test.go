@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,6 +147,10 @@ func TestRunProber_Success(t *testing.T) {
 			if in.GetIdentifier().GetIssueNumber() != issueNum {
 				t.Errorf("expected issue number %d, got %d", issueNum, in.GetIdentifier().GetIssueNumber())
 			}
+			expectedPrompt := buildIssueCommentPrompt(issueNum, "hello")
+			if in.GetPrompt() != expectedPrompt {
+				t.Errorf("expected prompt %s, got %s", expectedPrompt, in.GetPrompt())
+			}
 			upCalled = true
 			return &proto.UpResponse{
 				Config: &proto.DevcontainerConfig{
@@ -157,8 +162,9 @@ func TestRunProber_Success(t *testing.T) {
 			if in.GetId() != "brotherlogic-devcontainer-manager-456" {
 				t.Errorf("expected container id brotherlogic-devcontainer-manager-456, got %s", in.GetId())
 			}
-			if in.GetPrompt() != "goodbye" {
-				t.Errorf("expected prompt goodbye, got %s", in.GetPrompt())
+			expectedPrompt := buildIssueCommentPrompt(issueNum, "goodbye")
+			if in.GetPrompt() != expectedPrompt {
+				t.Errorf("expected prompt %s, got %s", expectedPrompt, in.GetPrompt())
 			}
 			pushCalled = true
 			return &proto.PushPromptResponse{}, nil
@@ -246,6 +252,10 @@ func TestRunProber_FailureCleanup(t *testing.T) {
 
 	mgrMock := &mockManagerServiceClient{
 		upFunc: func(ctx context.Context, in *proto.UpRequest) (*proto.UpResponse, error) {
+			expectedPrompt := buildIssueCommentPrompt(issueNum, "hello")
+			if in.GetPrompt() != expectedPrompt {
+				t.Errorf("expected prompt %s, got %s", expectedPrompt, in.GetPrompt())
+			}
 			return &proto.UpResponse{
 				Config: &proto.DevcontainerConfig{
 					Id: "brotherlogic-devcontainer-manager-456",
@@ -287,3 +297,154 @@ func TestRunProber_FailureCleanup(t *testing.T) {
 		t.Error("expected List RPC to be called on failure")
 	}
 }
+
+func TestBuildIssueCommentPrompt(t *testing.T) {
+	got := buildIssueCommentPrompt(123, "hello")
+	want := "Please post a comment containing strictly \"hello\" to issue #123 in this repository using the gh CLI tool."
+	if got != want {
+		t.Errorf("buildIssueCommentPrompt(123, \"hello\") = %q; want %q", got, want)
+	}
+
+	gotGoodbye := buildIssueCommentPrompt(123, "goodbye")
+	wantGoodbye := "Please post a comment containing strictly \"goodbye\" to issue #123 in this repository using the gh CLI tool."
+	if gotGoodbye != wantGoodbye {
+		t.Errorf("buildIssueCommentPrompt(123, \"goodbye\") = %q; want %q", gotGoodbye, wantGoodbye)
+	}
+}
+
+func TestRunProber_UpRPCInvocation(t *testing.T) {
+	pollInterval = 10 * time.Millisecond
+	cfg := ProberConfig{
+		Server:  "localhost:50051",
+		Repo:    "brotherlogic/devcontainer-manager",
+		Prompt1: "hello",
+		Prompt2: "goodbye",
+		Timeout: 2 * time.Second,
+		Harness: proto.Harness_HARNESS_PI,
+	}
+
+	issueNum := int32(789)
+	issueURL := "https://github.com/brotherlogic/devcontainer-manager/issues/789"
+
+	var upReq *proto.UpRequest
+
+	ghMock := &mockGitHubClient{
+		createIssueFunc: func(ctx context.Context, owner, repo string, req *github.IssueRequest) (*github.Issue, error) {
+			num := int(issueNum)
+			return &github.Issue{
+				Number:  &num,
+				HTMLURL: &issueURL,
+			}, nil
+		},
+		listCommentsFunc: func(ctx context.Context, owner, repo string, number int) ([]*github.IssueComment, error) {
+			body1 := "hello"
+			body2 := "goodbye"
+			return []*github.IssueComment{{Body: &body1}, {Body: &body2}}, nil
+		},
+	}
+
+	mgrMock := &mockManagerServiceClient{
+		upFunc: func(ctx context.Context, in *proto.UpRequest) (*proto.UpResponse, error) {
+			upReq = in
+			return &proto.UpResponse{
+				Config: &proto.DevcontainerConfig{
+					Id: "container-789",
+				},
+			}, nil
+		},
+		pushPromptFunc: func(ctx context.Context, in *proto.PushPromptRequest) (*proto.PushPromptResponse, error) {
+			return &proto.PushPromptResponse{}, nil
+		},
+		downFunc: func(ctx context.Context, in *proto.DownRequest) (*proto.DownResponse, error) {
+			return &proto.DownResponse{}, nil
+		},
+		listFunc: func(ctx context.Context, in *proto.ListRequest) (*proto.ListResponse, error) {
+			return &proto.ListResponse{}, nil
+		},
+	}
+
+	err := RunProber(context.Background(), cfg, ghMock, mgrMock)
+	if err != nil {
+		t.Fatalf("unexpected error running prober: %v", err)
+	}
+
+	if upReq == nil {
+		t.Fatal("expected Up RPC to be invoked, but it was not")
+	}
+
+	if upReq.GetRepo() != issueURL {
+		t.Errorf("expected Repo %q, got %q", issueURL, upReq.GetRepo())
+	}
+
+	if upReq.GetIdentifier().GetIssueNumber() != issueNum {
+		t.Errorf("expected IssueNumber %d, got %d", issueNum, upReq.GetIdentifier().GetIssueNumber())
+	}
+
+	expectedPrompt := buildIssueCommentPrompt(issueNum, "hello")
+	if upReq.GetPrompt() != expectedPrompt {
+		t.Errorf("expected Prompt %q, got %q", expectedPrompt, upReq.GetPrompt())
+	}
+
+	if !strings.HasPrefix(upReq.GetBranch(), "feature/test-") {
+		t.Errorf("expected Branch to have prefix 'feature/test-', got %q", upReq.GetBranch())
+	}
+
+	if upReq.GetHarness() != proto.Harness_HARNESS_PI {
+		t.Errorf("expected Harness HARNESS_PI, got %v", upReq.GetHarness())
+	}
+}
+
+func TestParseHarness(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    proto.Harness
+		wantErr bool
+	}{
+		{"antigravity", proto.Harness_HARNESS_ANTIGRAVITY, false},
+		{"pi", proto.Harness_HARNESS_PI, false},
+		{"invalid", proto.Harness_HARNESS_UNSPECIFIED, true},
+	}
+
+	for _, tt := range tests {
+		got, err := parseHarness(tt.input)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("parseHarness(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("parseHarness(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
+// TestParseHarness_MappingValidation tests that string inputs for --harness are correctly mapped to proto.Harness enum values.
+func TestParseHarness_MappingValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    proto.Harness
+		wantErr bool
+	}{
+		{name: "pi lowercase", input: "pi", want: proto.Harness_HARNESS_PI, wantErr: false},
+		{name: "pi uppercase", input: "PI", want: proto.Harness_HARNESS_PI, wantErr: false},
+		{name: "antigravity lowercase", input: "antigravity", want: proto.Harness_HARNESS_ANTIGRAVITY, wantErr: false},
+		{name: "antigravity titlecase", input: "Antigravity", want: proto.Harness_HARNESS_ANTIGRAVITY, wantErr: false},
+		{name: "empty defaults to antigravity", input: "", want: proto.Harness_HARNESS_ANTIGRAVITY, wantErr: false},
+		{name: "invalid harness string", input: "unsupported_harness", want: proto.Harness_HARNESS_UNSPECIFIED, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseHarness(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseHarness(%q) unexpected error status: got err=%v, wantErr=%v", tt.input, err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("parseHarness(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+
+

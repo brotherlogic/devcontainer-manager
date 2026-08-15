@@ -9,17 +9,21 @@
 *   **Continuous Synchronization:** Detects configuration changes in remote templates and aligns local devcontainers by rebuilding or cleaning them up.
 *   **Startup Failure Recovery:** Automatically deletes devcontainers if they fail to start properly, allowing them to be cleanly re-provisioned from head on the next cycle.
 *   **Fresh Issue Containers:** Forces devpod to recreate issue containers to always pull the freshest container config from head, bypassing the local cache.
-*   **GitHub Issue Devcontainers:** Automatically provisions dedicated devcontainers for open issues containing `seraphine` labels, handling state labels (`container-creating`, `container-ready`, `container-failed`) dynamically.
+*   **GitHub Issue Devcontainers:** Automatically provisions dedicated devcontainers for open issues containing `seraphine` labels, querying both issue metadata and bodies to deduplicate container reports, and handling state labels (`container-creating`, `container-ready`, `container-failed`, `container-asleep`) dynamically with explicit logging of adjustment reasons.
 *   **Container Prioritization:** Dynamically orders container startup operations, prioritizing repositories that have been most recently updated (pushed) on GitHub.
 *   **Deterministic Caching:** Minimizes rebuild times by storing composite SHAs of configurations and script dependencies in a state cache.
 *   **Deterministic Branch Slugs:** Generates consistent, 3-word branch names from issue titles locally without relying on external APIs, preventing provisioning failures caused by network timeouts or empty LLM outputs.
 *   **Automatic SSH Mapping:** Assigns unique SSH ports to workspaces, facilitating reverse-proxy routing via systems like `dcrouter`.
 *   **Startup Command Injection:** Polls containers via SSH until they are ready, then automatically injects execution commands into the container's active tmux session.
 *   **Robust Command Timeouts:** Prevents standard output pipe leaks from background tasks from deadlocking the issue provisioning loops.
-*   **Robust Observability & Prefixed Logging:** Prepends all log messages and command outputs with a `[owner/repo]` prefix for concurrent readability. Reports startup failure logs back to GitHub issues.
+*   **Robust Observability & Prefixed Logging:** Prepends all log messages and command outputs with a `[owner/repo]` prefix for concurrent readability. Reports startup failure logs back to GitHub issues, automatically falling back to the `devcontainer-manager` repository if permission errors (e.g. 403 or 404) are encountered.
 *   **GitHub API Rate Limit Retries:** Wraps GitHub API calls in a retry handler that performs exponential backoff when encountering rate limit responses (HTTP 403 or 429).
 *   **Latency Metric Tracking:** Automatically calculates and logs startup latency metrics for GitHub issues by recording `devcontainer-startup-latency` to GitHub comments after successful container provisioning. Includes robust test cases to verify error handling and prevent duplicate postings.
-*   **Manual Container Provisioning:** Processes manually-triggered container start requests (transitioning them from `DCM_RECEIVED` to `DCM_CREATING` and then to `DCM_READY`) via the gRPC interface asynchronously, handling provisioning failures gracefully. Sanitizes container IDs to conform to Devpod's workspace naming conventions (lowercase letters, numbers, and dashes) and extracts valid repository clone URLs from issue links.
+*   **Harness Support (Antigravity & Pi):** Supports both `HARNESS_ANTIGRAVITY` and `HARNESS_PI`. For `HARNESS_PI`, checks if `pi` is installed inside the devcontainer (`command -v pi`), automatically runs the `pi.dev` installation script if missing, injects `pi --prompt '<prompt>'` into tmux, and transitions state to `DCM_FAILED`, updates issue labels to `container-failed`, reports startup failure, and cleans up the container if installation or execution fails.
+*   **Manual Container Provisioning:** Processes manually-triggered container start requests (transitioning them from `DCM_RECEIVED` to `DCM_CREATING` and then to `DCM_READY`) via the gRPC interface asynchronously, handling provisioning failures gracefully. Injects prompt startup commands into `--prompt-interactive agy` session or `pi --prompt` session if supplied in `UpRequest` or defaults to issue/repo startup commands. Adjusts issue labels to `container-creating`, `container-ready`, or `container-failed` as appropriate for issue-linked manual containers. Sanitizes container IDs to conform to Devpod's workspace naming conventions (lowercase letters, numbers, and dashes), extracts valid repository clone URLs from issue links, and files detailed startup failure issues automatically on failure.
+*   **Startup Failure Deduplication:** Avoids filing duplicate GitHub issues for container startup failures using a helper function that checks for pre-existing open issues with the title `Issue Container Startup Failed`. If writing to the fallback repository (`devcontainer-manager`), it checks for the specific target repository reference in the issue body. Enforces a 65,000 character limit on the log content, truncating and prepending a truncation message if exceeded.
+*   **DevPod CLI Serializing Mutex:** Serializes all `devpod` CLI command invocations (`up`, `list`, `ssh`, `stop`, `delete`) across concurrent goroutines using a mutex lock to prevent configuration race conditions on `~/.devpod/config.yaml`.
+*   **Pre-Deletion Token Extraction Hook & Closure Reporting:** Prior to container deletion (`devpod delete`), automatically extracts token usage inside the container (`extractTokenUsage`), updates in-memory configuration state, and posts a markdown token usage report comment (`### 📊 Devcontainer Closure Token Usage Report`) to associated GitHub issues with non-blocking error handling.
 ---
 
 ## 🛠️ Architecture & Workflow
@@ -113,7 +117,7 @@ DCM keeps track of the active configurations it processes to prevent redundant r
 ## 📊 gRPC Manager Service (Previously Dashboard)
 
 DCM hosts a gRPC service implementing `ManagerService` defined in `proto/manager.proto` (which replaces and deprecates `dashboard.proto`). This service provides:
-*   **Up RPC:** Programmatically trigger the creation of a devcontainer for a specific repository, branch, or issue. Automatically checks if the specified branch exists on the target repository and creates it off `main` (or default branch) if missing.
+*   **Up RPC:** Programmatically trigger the creation of a devcontainer for a specific repository, branch, or issue (with explicit harness selection via `Harness` enum: `HARNESS_UNSPECIFIED`, `HARNESS_ANTIGRAVITY`, `HARNESS_PI`). Automatically checks if the specified branch exists on the target repository and creates it off `main` (or default branch) if missing.
 *   **Down RPC:** Terminates and cleans up an existing devcontainer instance/config from the cache by ID.
 *   **List RPC:** Retrieves a list of active devcontainers with their metadata, including ID, Request details, current State (`DCM_RECEIVED`, `DCM_READY`, `DCM_FAILED`, etc.), and retry status.
 *   **PushPrompt RPC:** Dispatches prompt payloads to target containers in the in-memory cache. Validates container existence (`NotFound` error if missing) and verifies container state is `DCM_READY` (`FailedPrecondition` error if not). Verifies that the tmux session is active (with fallback to the base ID if the session was created without the issue number suffix), and uses `devpod ssh` with `tmux send-keys` to inject the prompt. Retains containers in `DCM_READY` state after prompt execution to allow subsequent prompt calls.
@@ -132,11 +136,12 @@ DCM includes a standalone integration prober tool under `cmd/prober/main.go` tha
 * **Provisioning Validation:** Submits an `Up` RPC request to the manager using the issue URL.
 * **Prompt Loop Verification:** Polls the issue comments until the container posts the first prompt response (`hello`), then calls `PushPrompt` with the second prompt (`goodbye`) and verifies its response.
 * **Destruction & Cleanup:** Calls the `Down` RPC, verifies the container is deleted from the `List` RPC, closes the test GitHub issue, and cleans up resources even in case of timeouts or failure.
+* **Harness Selection:** Supports `--harness` flag (`antigravity` or `pi`, defaulting to `antigravity`) to specify the execution harness passed in `UpRequest`.
 * **Failure Diagnostics:** Outputs all currently running devcontainers if the comment polling times out or fails, enabling easier debugging of provisioning issues.
 
 ### Running the Prober:
 ```bash
-go run cmd/prober/main.go --server localhost:50051 --repo brotherlogic/devcontainer-manager --prompt-1 hello --prompt-2 goodbye --timeout 5m
+go run cmd/prober/main.go --server localhost:50051 --repo brotherlogic/devcontainer-manager --harness antigravity --prompt-1 hello --prompt-2 goodbye --timeout 5m
 ```
 
 ---
@@ -152,4 +157,13 @@ The repository includes pre-configured automation workflows under `.github/workf
 ## 🔗 Project Workflows & Contributions
 For details on the issue lifecycle, label transitions, and the AI-driven development workflows utilized in this project, refer to the [Issues Workflow Guide (issues.md)](file:///workspaces/devcontainer-manager/issues.md).
 
-- Log truncation for long startup failure logs
+## 🧪 Testing
+Run the unit test suite using the standard Go test command:
+```bash
+go test -v ./...
+```
+The test suite includes extensive mocking of GitHub API responses to verify:
+* Successful issue creation on target repositories.
+* Fallback write paths when lacking write permissions on target repositories.
+* Deduplication of startup failure issues.
+* Text truncation for log files exceeding GitHub's body length limits.
