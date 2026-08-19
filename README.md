@@ -114,6 +114,12 @@ DCM keeps track of the active configurations it processes to prevent redundant r
     rm ~/.config/devcontainer-manager/tracked_shas.json
     ```
 
+## 🧹 Disk Monitoring & High Disk Usage Alerting
+
+DCM includes disk usage parsing and alerting routines to prevent host disk exhaustion:
+* **Disk Usage Threshold Check:** Parses host root filesystem usage (`df -h /`) and checks if usage exceeds the 85% safety threshold.
+* **Automated Alerting:** Automatically creates a GitHub issue on `brotherlogic/devcontainer-manager` containing formatted disk status details when disk usage strictly exceeds 85%.
+
 ## 📊 gRPC Manager Service (Previously Dashboard)
 
 DCM hosts a gRPC service implementing `ManagerService` defined in `proto/manager.proto` (which replaces and deprecates `dashboard.proto`). This service provides:
