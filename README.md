@@ -24,6 +24,7 @@
 *   **Startup Failure Deduplication:** Avoids filing duplicate GitHub issues for container startup failures using a helper function that checks for pre-existing open issues with the title `Issue Container Startup Failed`. If writing to the fallback repository (`devcontainer-manager`), it checks for the specific target repository reference in the issue body. Enforces a 65,000 character limit on the log content, truncating and prepending a truncation message if exceeded.
 *   **DevPod CLI Serializing Mutex:** Serializes all `devpod` CLI command invocations (`up`, `list`, `ssh`, `stop`, `delete`) across concurrent goroutines using a mutex lock to prevent configuration race conditions on `~/.devpod/config.yaml`.
 *   **Pre-Deletion Token Extraction Hook & Closure Reporting:** Prior to container deletion (`devpod delete`), automatically extracts token usage inside the container (`extractTokenUsage`), updates in-memory configuration state, and posts a markdown token usage report comment (`### 📊 Devcontainer Closure Token Usage Report`) to associated GitHub issues with non-blocking error handling.
+*   **Periodic Disk Cleanup & High Disk Usage Alerting:** Automatically runs targeted Docker prune routines (container, image, and builder prune) and checks host disk usage via `df -h /` on a 1-hour periodic schedule. Automatically files a GitHub issue on `brotherlogic/devcontainer-manager` if host disk usage strictly exceeds 85% capacity.
 ---
 
 ## 🛠️ Architecture & Workflow

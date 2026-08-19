@@ -426,19 +426,7 @@ func main() {
 	}
 	defer srv.GracefulStop()
 
-	go func() {
-		for {
-			log.Printf("Running periodic docker system prune...")
-			cmd := exec.Command("docker", "system", "prune", "-af", "--volumes")
-			output, err := cmd.CombinedOutput()
-			if err != nil {
-				log.Printf("Docker prune failed: %v\nOutput: %s", err, string(output))
-			} else {
-				log.Printf("Docker prune succeeded")
-			}
-			time.Sleep(24 * time.Hour)
-		}
-	}()
+	go startPeriodicDiskCleanup(context.Background(), 1*time.Hour)
 
 	for {
 		err := run(context.Background(), cfg)
@@ -2300,6 +2288,48 @@ func createHighDiskUsageIssue(usagePercent int, diskDetails string) error {
 	log.Printf("Successfully created high disk usage alert issue: %s", strings.TrimSpace(string(out)))
 	return nil
 }
+
+// runPeriodicDiskCleanup executes docker prune routines, checks host disk usage via df -h /,
+// and files a GitHub issue if disk usage exceeds 85%.
+func runPeriodicDiskCleanup() {
+	log.Printf("Running periodic disk cleanup routine...")
+	runDockerPrune()
+
+	out, err := commandRunner("df", "-h", "/")
+	if err != nil {
+		log.Printf("Warning: df -h / check failed: %v", err)
+		return
+	}
+
+	diskDetails := string(out)
+	usagePercent, err := parseDiskUsage(diskDetails)
+	if err != nil {
+		log.Printf("Warning: failed to parse disk usage output: %v", err)
+		return
+	}
+
+	if err := createHighDiskUsageIssue(usagePercent, diskDetails); err != nil {
+		log.Printf("Warning: failed to create high disk usage issue: %v", err)
+	}
+}
+
+// startPeriodicDiskCleanup executes runPeriodicDiskCleanup on a periodic interval until ctx is canceled.
+func startPeriodicDiskCleanup(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	runPeriodicDiskCleanup()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runPeriodicDiskCleanup()
+		}
+	}
+}
+
 
 
 
