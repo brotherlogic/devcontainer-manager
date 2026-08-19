@@ -2282,7 +2282,7 @@ func isDiskUsageAboveThreshold(usagePercent int, threshold int) bool {
 const defaultDiskUsageThreshold = 85
 const defaultAlertRepository = "brotherlogic/devcontainer-manager"
 
-// createHighDiskUsageIssue creates a GitHub issue on brotherlogic/devcontainer-manager with disk status details when usagePercent exceeds 85%.
+// createHighDiskUsageIssue creates a GitHub issue on brotherlogic/devcontainer-manager with disk status details when usagePercent strictly exceeds the 85% threshold (> 85%).
 func createHighDiskUsageIssue(usagePercent int, diskDetails string) error {
 	if !isDiskUsageAboveThreshold(usagePercent, defaultDiskUsageThreshold) {
 		return nil
@@ -2291,12 +2291,15 @@ func createHighDiskUsageIssue(usagePercent int, diskDetails string) error {
 	title := fmt.Sprintf("High Disk Usage Alert: %d%%", usagePercent)
 	body := fmt.Sprintf("Disk usage has exceeded the 85%% threshold.\n\nCurrent disk usage: %d%%\n\nDisk Details:\n```\n%s\n```", usagePercent, diskDetails)
 
-	_, err := commandRunner("gh", "issue", "create", "-R", defaultAlertRepository, "--title", title, "--body", body)
+	out, err := commandRunner("gh", "issue", "create", "-R", defaultAlertRepository, "--title", title, "--body", body)
 	if err != nil {
+		log.Printf("Failed to create high disk usage alert issue: %v", err)
 		return fmt.Errorf("failed to create high disk usage issue: %w", err)
 	}
 
+	log.Printf("Successfully created high disk usage alert issue: %s", strings.TrimSpace(string(out)))
 	return nil
 }
+
 
 
