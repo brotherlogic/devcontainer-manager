@@ -3758,6 +3758,80 @@ func TestCreateHighDiskUsageIssue(t *testing.T) {
 	}
 }
 
+func TestRunPeriodicDiskCleanup(t *testing.T) {
+	origRunner := commandRunner
+	defer func() { commandRunner = origRunner }()
+
+	var executedCmds [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		full := append([]string{name}, args...)
+		executedCmds = append(executedCmds, full)
+		if name == "df" {
+			return []byte("Filesystem 100G 90G 10G 90% /\n"), nil
+		}
+		if name == "gh" {
+			return []byte("https://github.com/brotherlogic/devcontainer-manager/issues/1001"), nil
+		}
+		return []byte("success"), nil
+	}
+
+	runPeriodicDiskCleanup()
+
+	var foundDockerPrune, foundDF, foundGHIssue bool
+	for _, cmd := range executedCmds {
+		if len(cmd) > 0 && cmd[0] == "docker" {
+			foundDockerPrune = true
+		}
+		if len(cmd) > 0 && cmd[0] == "df" {
+			foundDF = true
+		}
+		if len(cmd) > 0 && cmd[0] == "gh" && len(cmd) > 2 && cmd[2] == "create" {
+			foundGHIssue = true
+		}
+	}
+
+	if !foundDockerPrune {
+		t.Errorf("expected docker prune commands to be executed")
+	}
+	if !foundDF {
+		t.Errorf("expected df command to be executed")
+	}
+	if !foundGHIssue {
+		t.Errorf("expected gh issue create command to be executed for 90%% disk usage")
+	}
+}
+
+func TestStartPeriodicDiskCleanup_Lifecycle(t *testing.T) {
+	origRunner := commandRunner
+	defer func() { commandRunner = origRunner }()
+
+	var runCount int
+	var mu sync.Mutex
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		mu.Lock()
+		runCount++
+		mu.Unlock()
+		if name == "df" {
+			return []byte("Filesystem 100G 40G 60G 40% /\n"), nil
+		}
+		return []byte("ok"), nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	startPeriodicDiskCleanup(ctx, 10*time.Millisecond)
+
+	mu.Lock()
+	count := runCount
+	mu.Unlock()
+
+	if count < 1 {
+		t.Errorf("expected startPeriodicDiskCleanup to run at least once, got %d", count)
+	}
+}
+
+
 
 
 
