@@ -3548,6 +3548,41 @@ func TestTokenExtractionAndComment_GitHubAPIFailure(t *testing.T) {
 	}
 }
 
+func TestRunDockerPrune_Success(t *testing.T) {
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var captured [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		captured = append(captured, append([]string{name}, args...))
+		return []byte("deleted"), nil
+	}
+
+	runDockerPrune()
+
+	expectedCmds := [][]string{
+		{"docker", "container", "prune", "-f"},
+		{"docker", "image", "prune", "-af"},
+		{"docker", "builder", "prune", "-f"},
+	}
+
+	if len(captured) != len(expectedCmds) {
+		t.Fatalf("expected %d commands, got %d", len(expectedCmds), len(captured))
+	}
+
+	for i, expected := range expectedCmds {
+		if len(captured[i]) != len(expected) {
+			t.Errorf("command %d length mismatch: expected %v, got %v", i, expected, captured[i])
+			continue
+		}
+		for j := range expected {
+			if captured[i][j] != expected[j] {
+				t.Errorf("command %d arg %d mismatch: expected %q, got %q", i, j, expected[j], captured[i][j])
+			}
+		}
+	}
+}
+
 func TestParseDiskUsage(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -3627,6 +3662,24 @@ func TestIsDiskUsageAboveThreshold(t *testing.T) {
 		if result != tt.expected {
 			t.Errorf("isDiskUsageAboveThreshold(%d, %d) = %v, expected %v", tt.usage, tt.threshold, result, tt.expected)
 		}
+	}
+}
+
+func TestRunDockerPrune_ErrorHandling(t *testing.T) {
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var captured [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		captured = append(captured, append([]string{name}, args...))
+		return []byte("error output"), fmt.Errorf("prune error")
+	}
+
+	// Should execute all prune steps despite errors without panicking
+	runDockerPrune()
+
+	if len(captured) != 3 {
+		t.Errorf("expected 3 commands to be attempted even with errors, got %d", len(captured))
 	}
 }
 

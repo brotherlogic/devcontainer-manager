@@ -2235,6 +2235,23 @@ func postLatencyComment(ctx context.Context, client *github.Client, owner, repo 
 	return nil
 }
 
+func runDockerPrune() {
+	pruneCmds := [][]string{
+		{"container", "prune", "-f"},
+		{"image", "prune", "-af"},
+		{"builder", "prune", "-f"},
+	}
+
+	for _, args := range pruneCmds {
+		out, err := commandRunner("docker", args...)
+		if err != nil {
+			log.Printf("Warning: docker %s failed: %v. Output: %s", strings.Join(args, " "), err, string(out))
+		} else {
+			log.Printf("Successfully executed docker %s: %s", strings.Join(args, " "), string(out))
+		}
+	}
+}
+
 var diskUsageRegexp = regexp.MustCompile(`(\d+)%`)
 
 // parseDiskUsage parses the output of `df -h /` and extracts the disk usage percentage integer.
