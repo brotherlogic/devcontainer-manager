@@ -219,6 +219,9 @@ func TestRun_ScanAndLaunchIssueContainer(t *testing.T) {
 			// Return list containing only the standard container (not the issue container)
 			return []byte(`[{"id": "test-repo"}]`), nil
 		}
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			return []byte("test-repo|sh.loft.devpod.workspace.id=test-repo\n"), nil
+		}
 		return []byte("success"), nil
 	}
 
@@ -454,6 +457,9 @@ func TestRun_SkipLaunchIfAlreadyActive(t *testing.T) {
 			// Return list containing both standard and issue containers running
 			return []byte(`[{"id": "test-repo"}, {"id": "test-repo-42"}]`), nil
 		}
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			return []byte("test-repo|sh.loft.devpod.workspace.id=test-repo\ntest-repo-42|sh.loft.devpod.workspace.id=test-repo-42\n"), nil
+		}
 		return []byte("success"), nil
 	}
 
@@ -540,6 +546,9 @@ func TestRun_HibernationOfOldestContainers(t *testing.T) {
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			// Return list containing standard container and 3 running issue containers
 			return []byte(`[{"id": "test-repo"}, {"id": "test-repo-1"}, {"id": "test-repo-2"}, {"id": "test-repo-3"}]`), nil
+		}
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			return []byte("test-repo|sh.loft.devpod.workspace.id=test-repo\ntest-repo-1|sh.loft.devpod.workspace.id=test-repo-1\ntest-repo-2|sh.loft.devpod.workspace.id=test-repo-2\ntest-repo-3|sh.loft.devpod.workspace.id=test-repo-3\n"), nil
 		}
 		return []byte("success"), nil
 	}
@@ -665,6 +674,9 @@ func TestRun_CleanupOfClosedOrUnlabeledContainers(t *testing.T) {
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			// Return list containing standard container and 1 running issue container (issue 4)
 			return []byte(`[{"id": "test-repo"}, {"id": "test-repo-4"}]`), nil
+		}
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			return []byte("test-repo|sh.loft.devpod.workspace.id=test-repo\ntest-repo-4|sh.loft.devpod.workspace.id=test-repo-4\n"), nil
 		}
 		return []byte("success"), nil
 	}
@@ -963,6 +975,9 @@ func TestRun_ScanAndLaunchIssueContainer_Failure(t *testing.T) {
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			return []byte(`[{"id": "test-repo"}]`), nil
 		}
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			return []byte("test-repo|sh.loft.devpod.workspace.id=test-repo\n"), nil
+		}
 		if name == devpodExe && len(args) > 0 && args[0] == "up" {
 			return []byte("failed to start container"), fmt.Errorf("up failed")
 		}
@@ -1142,6 +1157,9 @@ func TestRun_RecreateIssueContainerOnHashChange(t *testing.T) {
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			// Container is already running
 			return []byte(`[{"id": "test-repo"}, {"id": "test-repo-42"}]`), nil
+		}
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			return []byte("test-repo|sh.loft.devpod.workspace.id=test-repo\ntest-repo-42|sh.loft.devpod.workspace.id=test-repo-42\n"), nil
 		}
 		return []byte("success"), nil
 	}
@@ -1802,6 +1820,9 @@ func TestRun_ScanAndLaunchIssueContainer_LatencyCommentExists(t *testing.T) {
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			return []byte(`[{"id": "test-repo"}]`), nil
 		}
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			return []byte("test-repo|sh.loft.devpod.workspace.id=test-repo\n"), nil
+		}
 		return []byte("success"), nil
 	}
 
@@ -1921,6 +1942,9 @@ func TestRun_ScanAndLaunchIssueContainer_LatencyCommentError(t *testing.T) {
 		}
 		if name == devpodExe && len(args) > 0 && args[0] == "list" {
 			return []byte(`[{"id": "test-repo"}]`), nil
+		}
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			return []byte("test-repo|sh.loft.devpod.workspace.id=test-repo\n"), nil
 		}
 		return []byte("success"), nil
 	}
@@ -2922,6 +2946,9 @@ func TestManualIssueContainerNotCleanedUpWhenOpen(t *testing.T) {
 			// devpod list returns test-repo-311 (an open manual issue container without seraphine label)
 			return []byte(`[{"id":"test-repo-311","source":{"gitRepository":"git@github.com:test-owner/test-repo@main"}}]`), nil
 		}
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			return []byte("test-repo-311|sh.loft.devpod.workspace.id=test-repo-311\n"), nil
+		}
 		return []byte("success"), nil
 	}
 
@@ -3252,20 +3279,22 @@ func TestDevpodCLISerialization(t *testing.T) {
 	var maxActiveInvocations int32
 
 	commandRunner = func(name string, args ...string) ([]byte, error) {
-		current := atomic.AddInt32(&activeInvocations, 1)
-		defer atomic.AddInt32(&activeInvocations, -1)
+		if isDevpodCommand(name) {
+			current := atomic.AddInt32(&activeInvocations, 1)
+			defer atomic.AddInt32(&activeInvocations, -1)
 
-		for {
-			max := atomic.LoadInt32(&maxActiveInvocations)
-			if current <= max {
-				break
+			for {
+				max := atomic.LoadInt32(&maxActiveInvocations)
+				if current <= max {
+					break
+				}
+				if atomic.CompareAndSwapInt32(&maxActiveInvocations, max, current) {
+					break
+				}
 			}
-			if atomic.CompareAndSwapInt32(&maxActiveInvocations, max, current) {
-				break
-			}
+
+			time.Sleep(10 * time.Millisecond)
 		}
-
-		time.Sleep(10 * time.Millisecond)
 		return []byte("ok"), nil
 	}
 
@@ -3830,6 +3859,163 @@ func TestStartPeriodicDiskCleanup_Lifecycle(t *testing.T) {
 		t.Errorf("expected startPeriodicDiskCleanup to run at least once, got %d", count)
 	}
 }
+
+func TestListRunningDockerContainers_Success(t *testing.T) {
+	origRunner := commandRunner
+	defer func() { commandRunner = origRunner }()
+
+	dockerOutput := "container1|sh.loft.devpod.workspace.id=ws-1,dev.containers.id=uid-1\n" +
+		"/container2|devpod.workspace.id=ws-2\n" +
+		"container3|\n"
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			return []byte(dockerOutput), nil
+		}
+		return []byte(""), nil
+	}
+
+	containers, err := listRunningDockerContainers()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(containers) != 3 {
+		t.Fatalf("expected 3 containers, got %d", len(containers))
+	}
+	if containers[0].Names != "container1" || !strings.Contains(containers[0].Labels, "ws-1") {
+		t.Errorf("unexpected container[0]: %+v", containers[0])
+	}
+	if containers[1].Names != "/container2" || !strings.Contains(containers[1].Labels, "ws-2") {
+		t.Errorf("unexpected container[1]: %+v", containers[1])
+	}
+	if containers[2].Names != "container3" || containers[2].Labels != "" {
+		t.Errorf("unexpected container[2]: %+v", containers[2])
+	}
+}
+
+func TestListRunningDockerContainers_Error(t *testing.T) {
+	origRunner := commandRunner
+	defer func() { commandRunner = origRunner }()
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			return nil, fmt.Errorf("docker daemon down")
+		}
+		return []byte(""), nil
+	}
+
+	_, err := listRunningDockerContainers()
+	if err == nil {
+		t.Fatalf("expected error from listRunningDockerContainers, got nil")
+	}
+}
+
+func TestIsWorkspaceRunningInDocker(t *testing.T) {
+	containers := []DockerContainer{
+		{Names: "my-repo", Labels: "foo=bar"},
+		{Names: "/another-container", Labels: "sh.loft.devpod.workspace.id=ws-id-1,dev.containers.id=ws-uid-1"},
+		{Names: "vsc-container", Labels: "devpod.workspace.id=ws-id-2"},
+		{Names: "uid-only-container", Labels: "dev.containers.id=ws-uid-3"},
+	}
+
+	tests := []struct {
+		name      string
+		workspace DevpodWorkspace
+		expected  bool
+	}{
+		{
+			name:      "MatchByName",
+			workspace: DevpodWorkspace{ID: "my-repo"},
+			expected:  true,
+		},
+		{
+			name:      "MatchByDevpodLabelID",
+			workspace: DevpodWorkspace{ID: "ws-id-1", UID: "ws-uid-1"},
+			expected:  true,
+		},
+		{
+			name:      "MatchByDevpodWorkspaceIDLabel",
+			workspace: DevpodWorkspace{ID: "ws-id-2"},
+			expected:  true,
+		},
+		{
+			name:      "MatchByDevContainersUIDLabel",
+			workspace: DevpodWorkspace{ID: "ws-id-3", UID: "ws-uid-3"},
+			expected:  true,
+		},
+		{
+			name:      "NotFound",
+			workspace: DevpodWorkspace{ID: "non-existent", UID: "non-existent-uid"},
+			expected:  false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isWorkspaceRunningInDocker(tc.workspace, containers)
+			if got != tc.expected {
+				t.Errorf("isWorkspaceRunningInDocker(%+v) = %v, expected %v", tc.workspace, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestRun_DevpodWorkspaceMissingFromDocker_Recreated(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("test-owner/test-repo\n"); err != nil {
+		t.Fatalf("failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	origRunner := commandRunner
+	defer func() { commandRunner = origRunner }()
+
+	var capturedCommands [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			// devpod list has test-repo registered on disk
+			return []byte(`[{"id": "test-repo"}]`), nil
+		}
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			// Docker daemon does not have test-repo running (crashed/pruned)
+			return []byte("other-container|sh.loft.devpod.workspace.id=other-container\n"), nil
+		}
+		return []byte("success"), nil
+	}
+
+	cfg := &config{
+		once:          true,
+		containerList: tmpFile.Name(),
+	}
+
+	err = run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error from run: %v", err)
+	}
+
+	var devpodUpCalled bool
+	for _, cmd := range capturedCommands {
+		if cmd[0] == devpodExe && len(cmd) > 1 && cmd[1] == "up" {
+			for _, arg := range cmd {
+				if arg == "test-repo" {
+					devpodUpCalled = true
+				}
+			}
+		}
+	}
+
+	if !devpodUpCalled {
+		t.Errorf("expected devpod up to be called for test-repo when docker container is missing, but it was not called")
+	}
+}
+
 
 
 

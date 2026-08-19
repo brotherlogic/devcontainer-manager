@@ -131,6 +131,82 @@ func listDevpodWorkspaces() ([]DevpodWorkspace, error) {
 	return workspaces, nil
 }
 
+type DockerContainer struct {
+	Names  string
+	Labels string
+}
+
+var listRunningDockerContainers = func() ([]DockerContainer, error) {
+	out, err := commandRunner("docker", "ps", "--format", "{{.Names}}|{{.Labels}}")
+	if err != nil {
+		return nil, fmt.Errorf("failed to run docker ps: %w", err)
+	}
+
+	var containers []DockerContainer
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "|")
+		name := parts[0]
+		labels := ""
+		if len(parts) > 1 {
+			labels = parts[1]
+		}
+		containers = append(containers, DockerContainer{
+			Names:  name,
+			Labels: labels,
+		})
+	}
+	return containers, nil
+}
+
+func isWorkspaceRunningInDocker(w DevpodWorkspace, dockerContainers []DockerContainer) bool {
+	for _, dc := range dockerContainers {
+		// Check by name
+		names := strings.Split(dc.Names, ",")
+		for _, name := range names {
+			name = strings.TrimSpace(strings.TrimPrefix(name, "/"))
+			if name == w.ID {
+				return true
+			}
+			if w.UID != "" && name == w.UID {
+				return true
+			}
+		}
+
+		// Check by labels
+		labels := strings.Split(dc.Labels, ",")
+		for _, label := range labels {
+			label = strings.TrimSpace(label)
+			parts := strings.SplitN(label, "=", 2)
+			if len(parts) == 2 {
+				key, val := parts[0], parts[1]
+				if (key == "sh.loft.devpod.workspace.id" || key == "devpod.workspace.id" || key == "dev.containers.id" || strings.HasSuffix(key, "workspace.id") || strings.HasSuffix(key, "container.id")) &&
+					(val == w.ID || (w.UID != "" && val == w.UID)) {
+					return true
+				}
+			}
+		}
+
+		// Fallback label substring check
+		if w.ID != "" && (strings.Contains(dc.Labels, "sh.loft.devpod.workspace.id="+w.ID) ||
+			strings.Contains(dc.Labels, "devpod.workspace.id="+w.ID) ||
+			strings.Contains(dc.Labels, "dev.containers.id="+w.ID)) {
+			return true
+		}
+		if w.UID != "" && (strings.Contains(dc.Labels, "sh.loft.devpod.workspace.id="+w.UID) ||
+			strings.Contains(dc.Labels, "devpod.workspace.id="+w.UID) ||
+			strings.Contains(dc.Labels, "dev.containers.id="+w.UID)) {
+			return true
+		}
+	}
+	return false
+}
+
+
 var gitHubClientProvider = getGHClient
 
 var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, owner, repoName string) ([]*github.Issue, error) {
@@ -480,8 +556,15 @@ func run(ctx context.Context, cfg *config) error {
 	}
 
 	running := make(map[string]bool)
-	for _, w := range workspaces {
-		running[w.ID] = true
+	dockerContainers, dockerErr := listRunningDockerContainers()
+	if dockerErr != nil {
+		log.Printf("Warning: failed to list running docker containers: %v", dockerErr)
+	} else {
+		for _, w := range workspaces {
+			if isWorkspaceRunningInDocker(w, dockerContainers) {
+				running[w.ID] = true
+			}
+		}
 	}
 	syncCacheWithRunning(running)
 
