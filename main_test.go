@@ -3548,6 +3548,89 @@ func TestTokenExtractionAndComment_GitHubAPIFailure(t *testing.T) {
 	}
 }
 
+func TestParseDiskUsage(t *testing.T) {
+	tests := []struct {
+		name        string
+		output      string
+		expected    int
+		expectError bool
+	}{
+		{
+			name: "Standard df output Linux",
+			output: `Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        98G   45G   53G  46% /`,
+			expected:    46,
+			expectError: false,
+		},
+		{
+			name: "High usage output",
+			output: `Filesystem     1K-blocks      Used Available Use% Mounted on
+overlay        209600768 188640691  20960077  90% /`,
+			expected:    90,
+			expectError: false,
+		},
+		{
+			name: "Zero percent usage",
+			output: `Filesystem     1K-blocks  Used Available Use% Mounted on
+/dev/sda1      1000000       0   1000000   0% /`,
+			expected:    0,
+			expectError: false,
+		},
+		{
+			name: "100 percent usage",
+			output: `Filesystem     1K-blocks     Used Available Use% Mounted on
+/dev/sda1      1000000    1000000         0 100% /`,
+			expected:    100,
+			expectError: false,
+		},
+		{
+			name:        "Invalid output",
+			output:      "invalid df output with no percentage",
+			expected:    0,
+			expectError: true,
+		},
+		{
+			name:        "Empty output",
+			output:      "",
+			expected:    0,
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			usage, err := parseDiskUsage(tt.output)
+			if (err != nil) != tt.expectError {
+				t.Fatalf("parseDiskUsage() error = %v, expectError %v", err, tt.expectError)
+			}
+			if usage != tt.expected {
+				t.Errorf("parseDiskUsage() = %d, expected %d", usage, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsDiskUsageAboveThreshold(t *testing.T) {
+	tests := []struct {
+		usage     int
+		threshold int
+		expected  bool
+	}{
+		{usage: 84, threshold: 85, expected: false},
+		{usage: 85, threshold: 85, expected: false},
+		{usage: 86, threshold: 85, expected: true},
+		{usage: 90, threshold: 85, expected: true},
+	}
+
+	for _, tt := range tests {
+		result := isDiskUsageAboveThreshold(tt.usage, tt.threshold)
+		if result != tt.expected {
+			t.Errorf("isDiskUsageAboveThreshold(%d, %d) = %v, expected %v", tt.usage, tt.threshold, result, tt.expected)
+		}
+	}
+}
+
+
 
 
 
