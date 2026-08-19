@@ -4016,6 +4016,63 @@ func TestRun_DevpodWorkspaceMissingFromDocker_Recreated(t *testing.T) {
 	}
 }
 
+func TestRun_DockerError_FallsBackToDevpodWorkspaceList(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("test-owner/test-repo\n"); err != nil {
+		t.Fatalf("failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	origRunner := commandRunner
+	defer func() { commandRunner = origRunner }()
+
+	var capturedCommands [][]string
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			return []byte(`[{"id": "test-repo"}]`), nil
+		}
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			// Simulate docker daemon error
+			return nil, fmt.Errorf("docker daemon connection refused")
+		}
+		return []byte("success"), nil
+	}
+
+	cfg := &config{
+		once:          true,
+		containerList: tmpFile.Name(),
+	}
+
+	err = run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error from run: %v", err)
+	}
+
+	// Because docker ps errored, it should fall back to devpod workspace list and treat test-repo as running,
+	// avoiding mass re-provisioning.
+	var devpodUpCalled bool
+	for _, cmd := range capturedCommands {
+		if cmd[0] == devpodExe && len(cmd) > 1 && cmd[1] == "up" {
+			for _, arg := range cmd {
+				if arg == "test-repo" {
+					devpodUpCalled = true
+				}
+			}
+		}
+	}
+
+	if devpodUpCalled {
+		t.Errorf("expected devpod up NOT to be called when falling back on docker daemon error, but it was called")
+	}
+}
+
+
 
 
 

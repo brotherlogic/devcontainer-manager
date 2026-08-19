@@ -184,27 +184,16 @@ func isWorkspaceRunningInDocker(w DevpodWorkspace, dockerContainers []DockerCont
 			parts := strings.SplitN(label, "=", 2)
 			if len(parts) == 2 {
 				key, val := parts[0], parts[1]
-				if (key == "sh.loft.devpod.workspace.id" || key == "devpod.workspace.id" || key == "dev.containers.id" || strings.HasSuffix(key, "workspace.id") || strings.HasSuffix(key, "container.id")) &&
+				if (key == "sh.loft.devpod.workspace.id" || key == "devpod.workspace.id" || key == "dev.containers.id") &&
 					(val == w.ID || (w.UID != "" && val == w.UID)) {
 					return true
 				}
 			}
 		}
-
-		// Fallback label substring check
-		if w.ID != "" && (strings.Contains(dc.Labels, "sh.loft.devpod.workspace.id="+w.ID) ||
-			strings.Contains(dc.Labels, "devpod.workspace.id="+w.ID) ||
-			strings.Contains(dc.Labels, "dev.containers.id="+w.ID)) {
-			return true
-		}
-		if w.UID != "" && (strings.Contains(dc.Labels, "sh.loft.devpod.workspace.id="+w.UID) ||
-			strings.Contains(dc.Labels, "devpod.workspace.id="+w.UID) ||
-			strings.Contains(dc.Labels, "dev.containers.id="+w.UID)) {
-			return true
-		}
 	}
 	return false
 }
+
 
 
 var gitHubClientProvider = getGHClient
@@ -558,7 +547,10 @@ func run(ctx context.Context, cfg *config) error {
 	running := make(map[string]bool)
 	dockerContainers, dockerErr := listRunningDockerContainers()
 	if dockerErr != nil {
-		log.Printf("Warning: failed to list running docker containers: %v", dockerErr)
+		log.Printf("Warning: failed to list running docker containers: %v. Falling back to devpod workspace list.", dockerErr)
+		for _, w := range workspaces {
+			running[w.ID] = true
+		}
 	} else {
 		for _, w := range workspaces {
 			if isWorkspaceRunningInDocker(w, dockerContainers) {
