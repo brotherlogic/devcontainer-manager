@@ -2234,3 +2234,31 @@ func postLatencyComment(ctx context.Context, client *github.Client, owner, repo 
 	log.Printf("Logged metric devcontainer-startup-latency for issue %d: %v", issueNum, latency)
 	return nil
 }
+
+var diskUsageRegexp = regexp.MustCompile(`(\d+)%`)
+
+// parseDiskUsage parses the output of `df -h /` and extracts the disk usage percentage integer.
+func parseDiskUsage(output string) (int, error) {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
+		return 0, fmt.Errorf("empty df output")
+	}
+
+	for _, line := range lines {
+		matches := diskUsageRegexp.FindStringSubmatch(line)
+		if len(matches) > 1 {
+			val, err := strconv.Atoi(matches[1])
+			if err == nil {
+				return val, nil
+			}
+		}
+	}
+
+	return 0, fmt.Errorf("could not parse disk usage percentage from output: %q", output)
+}
+
+// isDiskUsageAboveThreshold returns true if the parsed usage percentage strictly exceeds the given threshold percentage.
+func isDiskUsageAboveThreshold(usagePercent int, threshold int) bool {
+	return usagePercent > threshold
+}
+
