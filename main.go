@@ -2234,3 +2234,21 @@ func postLatencyComment(ctx context.Context, client *github.Client, owner, repo 
 	log.Printf("Logged metric devcontainer-startup-latency for issue %d: %v", issueNum, latency)
 	return nil
 }
+
+func runDockerPrune() {
+	pruneCmds := [][]string{
+		{"container", "prune", "-f"},
+		{"image", "prune", "-af"},
+		{"builder", "prune", "-f"},
+	}
+
+	for _, args := range pruneCmds {
+		out, err := commandRunner("docker", args...)
+		if err != nil {
+			log.Printf("Warning: docker %s failed: %v. Output: %s", strings.Join(args, " "), err, string(out))
+		} else {
+			log.Printf("Successfully executed docker %s: %s", strings.Join(args, " "), string(out))
+		}
+	}
+}
+
