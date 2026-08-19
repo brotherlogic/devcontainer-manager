@@ -3683,6 +3683,81 @@ func TestRunDockerPrune_ErrorHandling(t *testing.T) {
 	}
 }
 
+func TestCreateHighDiskUsageIssue(t *testing.T) {
+	origRunner := commandRunner
+	defer func() { commandRunner = origRunner }()
+
+	var capturedName string
+	var capturedArgs []string
+	var mockError error
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		capturedName = name
+		capturedArgs = args
+		return []byte("https://github.com/brotherlogic/devcontainer-manager/issues/999"), mockError
+	}
+
+	diskDetails := "Filesystem 98G 90G 8G 90% /"
+
+	// Case 1: Below or at threshold (85%), gh issue create should NOT be called
+	capturedName = ""
+	capturedArgs = nil
+	err := createHighDiskUsageIssue(85, diskDetails)
+	if err != nil {
+		t.Fatalf("unexpected error for 85%% disk usage: %v", err)
+	}
+	if capturedName != "" {
+		t.Errorf("expected commandRunner not to be invoked for 85%% usage, but got %s %v", capturedName, capturedArgs)
+	}
+
+	// Case 2: Above threshold (90%), gh issue create MUST be called with correct repo, title, body
+	capturedName = ""
+	capturedArgs = nil
+	err = createHighDiskUsageIssue(90, diskDetails)
+	if err != nil {
+		t.Fatalf("unexpected error for 90%% disk usage: %v", err)
+	}
+	if capturedName != "gh" {
+		t.Errorf("expected command gh, got %s", capturedName)
+	}
+	expectedSubArgs := []string{"issue", "create", "-R", "brotherlogic/devcontainer-manager"}
+	if len(capturedArgs) < 4 {
+		t.Fatalf("expected at least 4 args, got %v", capturedArgs)
+	}
+	for i, sub := range expectedSubArgs {
+		if capturedArgs[i] != sub {
+			t.Errorf("expected arg[%d] to be %s, got %s", i, sub, capturedArgs[i])
+		}
+	}
+	// Check title and body in args
+	var foundTitle, foundBody bool
+	for i, arg := range capturedArgs {
+		if arg == "--title" && i+1 < len(capturedArgs) {
+			if strings.Contains(capturedArgs[i+1], "90%") {
+				foundTitle = true
+			}
+		}
+		if arg == "--body" && i+1 < len(capturedArgs) {
+			if strings.Contains(capturedArgs[i+1], diskDetails) {
+				foundBody = true
+			}
+		}
+	}
+	if !foundTitle {
+		t.Errorf("expected title to contain '90%%', args: %v", capturedArgs)
+	}
+	if !foundBody {
+		t.Errorf("expected body to contain disk details %q, args: %v", diskDetails, capturedArgs)
+	}
+
+	// Case 3: Command runner returns error
+	mockError = fmt.Errorf("gh command failed")
+	err = createHighDiskUsageIssue(90, diskDetails)
+	if err == nil {
+		t.Errorf("expected error when gh command fails, got nil")
+	}
+}
+
 
 
 
