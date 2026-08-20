@@ -3886,7 +3886,27 @@ func TestCreateHighDiskUsageIssue(t *testing.T) {
 	}
 	err = createHighDiskUsageIssue(90, diskDetails)
 	if err == nil {
-		t.Errorf("expected error when gh command fails, got nil")
+		t.Errorf("expected error when gh create command fails, got nil")
+	}
+
+	// Case 5: gh issue list returns error - fails safely and does not create issue
+	capturedCommands = nil
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		cmd := append([]string{name}, args...)
+		capturedCommands = append(capturedCommands, cmd)
+		if name == "gh" && len(args) > 1 && args[1] == "list" {
+			return nil, fmt.Errorf("gh list failed")
+		}
+		return []byte("https://github.com/brotherlogic/devcontainer-manager/issues/999"), nil
+	}
+	err = createHighDiskUsageIssue(90, diskDetails)
+	if err == nil {
+		t.Errorf("expected error when gh list command fails, got nil")
+	}
+	for _, cmd := range capturedCommands {
+		if len(cmd) > 2 && cmd[0] == "gh" && cmd[2] == "create" {
+			t.Errorf("expected gh issue create NOT to be invoked when gh list fails, but got: %v", cmd)
+		}
 	}
 }
 

@@ -2377,8 +2377,9 @@ func createHighDiskUsageIssue(usagePercent int, diskDetails string) error {
 
 	hasOpen, err := hasOpenHighDiskUsageIssue()
 	if err != nil {
-		log.Printf("Warning: failed to check for existing open high disk usage issues: %v", err)
-	} else if hasOpen {
+		return fmt.Errorf("failed to check for existing open high disk usage issues: %w", err)
+	}
+	if hasOpen {
 		log.Printf("High disk usage alert issue already open, skipping creation")
 		return nil
 	}
