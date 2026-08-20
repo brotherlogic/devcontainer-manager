@@ -4198,16 +4198,66 @@ func TestRun_DockerError_FallsBackToDevpodWorkspaceList(t *testing.T) {
 	}
 }
 
+func TestExtractTokenUsage_CommandErrorWithStderr(t *testing.T) {
+	origCommandRunner := commandRunner
+	defer func() { commandRunner = origCommandRunner }()
 
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		return []byte("cat: /tmp/token_usage.json: No such file or directory\n"), fmt.Errorf("exit status 1")
+	}
 
+	usage := extractTokenUsage(context.Background(), "test-repo", "container-123")
+	if usage == nil {
+		t.Fatalf("expected non-nil TokenUsage")
+	}
+	if usage.GetStatus() != proto.ExtractionStatus_EXTRACTION_FAILED {
+		t.Errorf("expected status EXTRACTION_FAILED, got %v", usage.GetStatus())
+	}
+	expectedReason := "exit status 1: cat: /tmp/token_usage.json: No such file or directory"
+	if usage.GetFailureReason() != expectedReason {
+		t.Errorf("expected FailureReason %q, got %q", expectedReason, usage.GetFailureReason())
+	}
+}
 
+func TestExtractTokenUsage_CommandErrorWithoutStderr(t *testing.T) {
+	origCommandRunner := commandRunner
+	defer func() { commandRunner = origCommandRunner }()
 
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		return []byte("   \n"), fmt.Errorf("connection timeout")
+	}
 
+	usage := extractTokenUsage(context.Background(), "test-repo", "container-123")
+	if usage == nil {
+		t.Fatalf("expected non-nil TokenUsage")
+	}
+	if usage.GetStatus() != proto.ExtractionStatus_EXTRACTION_FAILED {
+		t.Errorf("expected status EXTRACTION_FAILED, got %v", usage.GetStatus())
+	}
+	expectedReason := "connection timeout"
+	if usage.GetFailureReason() != expectedReason {
+		t.Errorf("expected FailureReason %q, got %q", expectedReason, usage.GetFailureReason())
+	}
+}
 
+func TestExtractTokenUsage_MalformedOutput(t *testing.T) {
+	origCommandRunner := commandRunner
+	defer func() { commandRunner = origCommandRunner }()
 
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		return []byte("  invalid token format \n"), nil
+	}
 
-
-
-
-
+	usage := extractTokenUsage(context.Background(), "test-repo", "container-123")
+	if usage == nil {
+		t.Fatalf("expected non-nil TokenUsage")
+	}
+	if usage.GetStatus() != proto.ExtractionStatus_EXTRACTION_FAILED {
+		t.Errorf("expected status EXTRACTION_FAILED, got %v", usage.GetStatus())
+	}
+	expectedReason := "failed to parse token usage output: invalid token format"
+	if usage.GetFailureReason() != expectedReason {
+		t.Errorf("expected FailureReason %q, got %q", expectedReason, usage.GetFailureReason())
+	}
+}
 
