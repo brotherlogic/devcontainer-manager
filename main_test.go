@@ -3712,78 +3712,201 @@ func TestRunDockerPrune_ErrorHandling(t *testing.T) {
 	}
 }
 
+func TestHasOpenHighDiskUsageIssue(t *testing.T) {
+	origRunner := commandRunner
+	defer func() { commandRunner = origRunner }()
+
+	t.Run("OpenIssueExists", func(t *testing.T) {
+		commandRunner = func(name string, args ...string) ([]byte, error) {
+			if name == "gh" && len(args) > 1 && args[1] == "list" {
+				return []byte(`[{"number":421,"title":"High Disk Usage Alert: 100%"}]`), nil
+			}
+			return []byte(""), nil
+		}
+
+		hasOpen, err := hasOpenHighDiskUsageIssue()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !hasOpen {
+			t.Errorf("expected hasOpen to be true, got false")
+		}
+	})
+
+	t.Run("NoOpenIssues", func(t *testing.T) {
+		commandRunner = func(name string, args ...string) ([]byte, error) {
+			if name == "gh" && len(args) > 1 && args[1] == "list" {
+				return []byte(`[]`), nil
+			}
+			return []byte(""), nil
+		}
+
+		hasOpen, err := hasOpenHighDiskUsageIssue()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if hasOpen {
+			t.Errorf("expected hasOpen to be false, got true")
+		}
+	})
+
+	t.Run("OtherIssuesOnly", func(t *testing.T) {
+		commandRunner = func(name string, args ...string) ([]byte, error) {
+			if name == "gh" && len(args) > 1 && args[1] == "list" {
+				return []byte(`[{"number":407,"title":"Verify Docker container liveness"}]`), nil
+			}
+			return []byte(""), nil
+		}
+
+		hasOpen, err := hasOpenHighDiskUsageIssue()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if hasOpen {
+			t.Errorf("expected hasOpen to be false, got true")
+		}
+	})
+
+	t.Run("CommandError", func(t *testing.T) {
+		commandRunner = func(name string, args ...string) ([]byte, error) {
+			return nil, fmt.Errorf("gh cli error")
+		}
+
+		_, err := hasOpenHighDiskUsageIssue()
+		if err == nil {
+			t.Errorf("expected error when gh command fails, got nil")
+		}
+	})
+}
+
 func TestCreateHighDiskUsageIssue(t *testing.T) {
 	origRunner := commandRunner
 	defer func() { commandRunner = origRunner }()
 
-	var capturedName string
-	var capturedArgs []string
+	var capturedCommands [][]string
 	var mockError error
 
 	commandRunner = func(name string, args ...string) ([]byte, error) {
-		capturedName = name
-		capturedArgs = args
-		return []byte("https://github.com/brotherlogic/devcontainer-manager/issues/999"), mockError
+		cmd := append([]string{name}, args...)
+		capturedCommands = append(capturedCommands, cmd)
+		if name == "gh" && len(args) > 1 && args[1] == "list" {
+			return []byte("[]"), mockError
+		}
+		if name == "gh" && len(args) > 1 && args[1] == "create" {
+			return []byte("https://github.com/brotherlogic/devcontainer-manager/issues/999"), mockError
+		}
+		return []byte(""), mockError
 	}
 
 	diskDetails := "Filesystem 98G 90G 8G 90% /"
 
-	// Case 1: Below or at threshold (85%), gh issue create should NOT be called
-	capturedName = ""
-	capturedArgs = nil
+	// Case 1: Below or at threshold (85%), gh commands should NOT be called
+	capturedCommands = nil
 	err := createHighDiskUsageIssue(85, diskDetails)
 	if err != nil {
 		t.Fatalf("unexpected error for 85%% disk usage: %v", err)
 	}
-	if capturedName != "" {
-		t.Errorf("expected commandRunner not to be invoked for 85%% usage, but got %s %v", capturedName, capturedArgs)
+	if len(capturedCommands) > 0 {
+		t.Errorf("expected commandRunner not to be invoked for 85%% usage, but got %v", capturedCommands)
 	}
 
-	// Case 2: Above threshold (90%), gh issue create MUST be called with correct repo, title, body
-	capturedName = ""
-	capturedArgs = nil
+	// Case 2: Above threshold (90%), no existing issue -> gh issue list then gh issue create MUST be called
+	capturedCommands = nil
 	err = createHighDiskUsageIssue(90, diskDetails)
 	if err != nil {
 		t.Fatalf("unexpected error for 90%% disk usage: %v", err)
 	}
-	if capturedName != "gh" {
-		t.Errorf("expected command gh, got %s", capturedName)
+	var createdCmd []string
+	for _, cmd := range capturedCommands {
+		if len(cmd) > 2 && cmd[0] == "gh" && cmd[2] == "create" {
+			createdCmd = cmd
+			break
+		}
 	}
-	expectedSubArgs := []string{"issue", "create", "-R", "brotherlogic/devcontainer-manager"}
-	if len(capturedArgs) < 4 {
-		t.Fatalf("expected at least 4 args, got %v", capturedArgs)
+	if createdCmd == nil {
+		t.Fatalf("expected gh issue create command, captured: %v", capturedCommands)
 	}
+	expectedSubArgs := []string{"gh", "issue", "create", "-R", "brotherlogic/devcontainer-manager"}
 	for i, sub := range expectedSubArgs {
-		if capturedArgs[i] != sub {
-			t.Errorf("expected arg[%d] to be %s, got %s", i, sub, capturedArgs[i])
+		if createdCmd[i] != sub {
+			t.Errorf("expected arg[%d] to be %s, got %s", i, sub, createdCmd[i])
 		}
 	}
 	// Check title and body in args
 	var foundTitle, foundBody bool
-	for i, arg := range capturedArgs {
-		if arg == "--title" && i+1 < len(capturedArgs) {
-			if strings.Contains(capturedArgs[i+1], "90%") {
+	for i, arg := range createdCmd {
+		if arg == "--title" && i+1 < len(createdCmd) {
+			if strings.Contains(createdCmd[i+1], "90%") {
 				foundTitle = true
 			}
 		}
-		if arg == "--body" && i+1 < len(capturedArgs) {
-			if strings.Contains(capturedArgs[i+1], diskDetails) {
+		if arg == "--body" && i+1 < len(createdCmd) {
+			if strings.Contains(createdCmd[i+1], diskDetails) {
 				foundBody = true
 			}
 		}
 	}
 	if !foundTitle {
-		t.Errorf("expected title to contain '90%%', args: %v", capturedArgs)
+		t.Errorf("expected title to contain '90%%', args: %v", createdCmd)
 	}
 	if !foundBody {
-		t.Errorf("expected body to contain disk details %q, args: %v", diskDetails, capturedArgs)
+		t.Errorf("expected body to contain disk details %q, args: %v", diskDetails, createdCmd)
 	}
 
-	// Case 3: Command runner returns error
-	mockError = fmt.Errorf("gh command failed")
+	// Case 3: Duplicate prevention - existing open issue prevents create
+	capturedCommands = nil
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		cmd := append([]string{name}, args...)
+		capturedCommands = append(capturedCommands, cmd)
+		if name == "gh" && len(args) > 1 && args[1] == "list" {
+			return []byte(`[{"number":421,"title":"High Disk Usage Alert: 100%"}]`), nil
+		}
+		if name == "gh" && len(args) > 1 && args[1] == "create" {
+			return []byte("https://github.com/brotherlogic/devcontainer-manager/issues/999"), nil
+		}
+		return []byte(""), nil
+	}
+	err = createHighDiskUsageIssue(90, diskDetails)
+	if err != nil {
+		t.Fatalf("unexpected error when duplicate issue exists: %v", err)
+	}
+	for _, cmd := range capturedCommands {
+		if len(cmd) > 2 && cmd[0] == "gh" && cmd[2] == "create" {
+			t.Errorf("expected gh issue create NOT to be invoked when duplicate exists, but got: %v", cmd)
+		}
+	}
+
+	// Case 4: gh issue create returns error
+	capturedCommands = nil
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		if name == "gh" && len(args) > 1 && args[1] == "list" {
+			return []byte("[]"), nil
+		}
+		return nil, fmt.Errorf("gh command failed")
+	}
 	err = createHighDiskUsageIssue(90, diskDetails)
 	if err == nil {
-		t.Errorf("expected error when gh command fails, got nil")
+		t.Errorf("expected error when gh create command fails, got nil")
+	}
+
+	// Case 5: gh issue list returns error - fails safely and does not create issue
+	capturedCommands = nil
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		cmd := append([]string{name}, args...)
+		capturedCommands = append(capturedCommands, cmd)
+		if name == "gh" && len(args) > 1 && args[1] == "list" {
+			return nil, fmt.Errorf("gh list failed")
+		}
+		return []byte("https://github.com/brotherlogic/devcontainer-manager/issues/999"), nil
+	}
+	err = createHighDiskUsageIssue(90, diskDetails)
+	if err == nil {
+		t.Errorf("expected error when gh list command fails, got nil")
+	}
+	for _, cmd := range capturedCommands {
+		if len(cmd) > 2 && cmd[0] == "gh" && cmd[2] == "create" {
+			t.Errorf("expected gh issue create NOT to be invoked when gh list fails, but got: %v", cmd)
+		}
 	}
 }
 
@@ -3798,7 +3921,10 @@ func TestRunPeriodicDiskCleanup(t *testing.T) {
 		if name == "df" {
 			return []byte("Filesystem 100G 90G 10G 90% /\n"), nil
 		}
-		if name == "gh" {
+		if name == "gh" && len(args) > 1 && args[1] == "list" {
+			return []byte("[]"), nil
+		}
+		if name == "gh" && len(args) > 1 && args[1] == "create" {
 			return []byte("https://github.com/brotherlogic/devcontainer-manager/issues/1001"), nil
 		}
 		return []byte("success"), nil
@@ -3814,7 +3940,7 @@ func TestRunPeriodicDiskCleanup(t *testing.T) {
 		if len(cmd) > 0 && cmd[0] == "df" {
 			foundDF = true
 		}
-		if len(cmd) > 0 && cmd[0] == "gh" && len(cmd) > 2 && cmd[2] == "create" {
+		if len(cmd) > 2 && cmd[0] == "gh" && cmd[2] == "create" {
 			foundGHIssue = true
 		}
 	}

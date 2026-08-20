@@ -2344,10 +2344,43 @@ func isDiskUsageAboveThreshold(usagePercent int, threshold int) bool {
 
 const defaultDiskUsageThreshold = 85
 const defaultAlertRepository = "brotherlogic/devcontainer-manager"
+const highDiskUsageTitlePrefix = "High Disk Usage Alert"
 
-// createHighDiskUsageIssue creates a GitHub issue on brotherlogic/devcontainer-manager with disk status details when usagePercent strictly exceeds the 85% threshold (> 85%).
+// hasOpenHighDiskUsageIssue checks if there is already an open issue for high disk usage on defaultAlertRepository.
+func hasOpenHighDiskUsageIssue() (bool, error) {
+	out, err := commandRunner("gh", "issue", "list", "-R", defaultAlertRepository, "--state", "open", "--json", "number,title")
+	if err != nil {
+		return false, fmt.Errorf("failed to list open issues: %w", err)
+	}
+
+	var issues []struct {
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+	}
+	if err := json.Unmarshal(out, &issues); err != nil {
+		return false, fmt.Errorf("failed to unmarshal issues: %w", err)
+	}
+
+	for _, issue := range issues {
+		if strings.Contains(issue.Title, highDiskUsageTitlePrefix) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// createHighDiskUsageIssue creates a GitHub issue on brotherlogic/devcontainer-manager with disk status details when usagePercent strictly exceeds the 85% threshold (> 85%) and no open high disk usage issue already exists.
 func createHighDiskUsageIssue(usagePercent int, diskDetails string) error {
 	if !isDiskUsageAboveThreshold(usagePercent, defaultDiskUsageThreshold) {
+		return nil
+	}
+
+	hasOpen, err := hasOpenHighDiskUsageIssue()
+	if err != nil {
+		return fmt.Errorf("failed to check for existing open high disk usage issues: %w", err)
+	}
+	if hasOpen {
+		log.Printf("High disk usage alert issue already open, skipping creation")
 		return nil
 	}
 
