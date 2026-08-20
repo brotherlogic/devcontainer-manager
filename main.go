@@ -1172,6 +1172,7 @@ func stopContainer(repo, id string) error {
 }
 
 func extractTokenUsage(ctx context.Context, repo, containerID string) *proto.TokenUsage {
+	// runCommandWithLog returns combined stdout/stderr output from devpod ssh execution.
 	out, err := runCommandWithLog(repo, devpodExe, "ssh", containerID, "--command", "cat /tmp/token_usage.json")
 	if err != nil {
 		outStr := strings.TrimSpace(string(out))
