@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -4261,3 +4262,91 @@ func TestExtractTokenUsage_MalformedOutput(t *testing.T) {
 	}
 }
 
+func TestExtractTokenUsage(t *testing.T) {
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	tests := []struct {
+		name          string
+		output        string
+		cmdErr        error
+		wantStatus    proto.ExtractionStatus
+		wantTokens    int64
+		wantErrReason bool
+	}{
+		{
+			name:       "json zero tokens",
+			output:     `{"total_tokens": 0}`,
+			wantStatus: proto.ExtractionStatus_EXTRACTION_SUCCESS,
+			wantTokens: 0,
+		},
+		{
+			name:       "string zero tokens",
+			output:     "0\n",
+			wantStatus: proto.ExtractionStatus_EXTRACTION_SUCCESS,
+			wantTokens: 0,
+		},
+		{
+			name:       "json positive tokens",
+			output:     `{"total_tokens": 1250}`,
+			wantStatus: proto.ExtractionStatus_EXTRACTION_SUCCESS,
+			wantTokens: 1250,
+		},
+		{
+			name:       "string positive tokens",
+			output:     "4242",
+			wantStatus: proto.ExtractionStatus_EXTRACTION_SUCCESS,
+			wantTokens: 4242,
+		},
+		{
+			name:          "invalid payload",
+			output:        "invalid json or number",
+			wantStatus:    proto.ExtractionStatus_EXTRACTION_FAILED,
+			wantErrReason: true,
+		},
+		{
+			name:          "negative string tokens",
+			output:        "-10",
+			wantStatus:    proto.ExtractionStatus_EXTRACTION_FAILED,
+			wantErrReason: true,
+		},
+		{
+			name:          "negative json tokens",
+			output:        `{"total_tokens": -5}`,
+			wantStatus:    proto.ExtractionStatus_EXTRACTION_FAILED,
+			wantErrReason: true,
+		},
+		{
+			name:          "command failure",
+			output:        "",
+			cmdErr:        errors.New("exit status 1"),
+			wantStatus:    proto.ExtractionStatus_EXTRACTION_FAILED,
+			wantErrReason: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			commandRunner = func(name string, args ...string) ([]byte, error) {
+				if isDevpodCommand(name) && len(args) >= 4 && args[0] == "ssh" && args[2] == "--command" {
+					return []byte(tc.output), tc.cmdErr
+				}
+				return nil, errors.New("unexpected command")
+			}
+
+			usage := extractTokenUsage(context.Background(), "test-repo", "container-123")
+			if usage == nil {
+				t.Fatalf("expected non-nil TokenUsage, got nil")
+			}
+			if usage.GetStatus() != tc.wantStatus {
+				t.Errorf("status mismatch: got %v, want %v", usage.GetStatus(), tc.wantStatus)
+			}
+			if usage.GetTotalTokens() != tc.wantTokens {
+				t.Errorf("total_tokens mismatch: got %d, want %d", usage.GetTotalTokens(), tc.wantTokens)
+			}
+			if tc.wantErrReason && usage.GetFailureReason() == "" {
+				t.Errorf("expected non-empty failure reason, got empty")
+			}
+		})
+	}
+}
