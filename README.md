@@ -121,6 +121,7 @@ DCM keeps track of the active configurations it processes to prevent redundant r
 DCM includes disk usage parsing and alerting routines to prevent host disk exhaustion:
 * **Disk Usage Threshold Check:** Parses host root filesystem usage (`df -h /`) and checks if usage exceeds the 85% safety threshold.
 * **Automated Alerting:** Automatically creates a GitHub issue on `brotherlogic/devcontainer-manager` containing formatted disk status details when disk usage strictly exceeds 85%.
+* **Duplicate Alert Prevention:** Checks for existing open high disk usage issues on GitHub before creating a new one, preventing spam when disk usage remains high across periodic checks.
 
 ## 📊 gRPC Manager Service (Previously Dashboard)
 
