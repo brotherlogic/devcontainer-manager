@@ -4350,3 +4350,171 @@ func TestExtractTokenUsage(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractTokenUsage_ContextCancelled(t *testing.T) {
+	origCommandRunner := commandRunner
+	defer func() { commandRunner = origCommandRunner }()
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		return []byte(`{"total_tokens": 100}`), nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	usage := extractTokenUsage(ctx, "test-repo", "container-123")
+	if usage == nil {
+		t.Fatalf("expected non-nil TokenUsage")
+	}
+	if usage.GetStatus() != proto.ExtractionStatus_EXTRACTION_FAILED {
+		t.Errorf("expected EXTRACTION_FAILED for cancelled context, got %v", usage.GetStatus())
+	}
+	if !strings.Contains(usage.GetFailureReason(), "context canceled") {
+		t.Errorf("expected failure reason to contain 'context canceled', got %q", usage.GetFailureReason())
+	}
+}
+
+func TestExtractTokenUsage_ContextTimeout(t *testing.T) {
+	origCommandRunner := commandRunner
+	defer func() { commandRunner = origCommandRunner }()
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		return []byte(`{"total_tokens": 100}`), nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	defer cancel()
+	time.Sleep(5 * time.Millisecond)
+
+	usage := extractTokenUsage(ctx, "test-repo", "container-123")
+	if usage == nil {
+		t.Fatalf("expected non-nil TokenUsage")
+	}
+	if usage.GetStatus() != proto.ExtractionStatus_EXTRACTION_FAILED {
+		t.Errorf("expected EXTRACTION_FAILED for timed out context, got %v", usage.GetStatus())
+	}
+	if !strings.Contains(usage.GetFailureReason(), "context deadline exceeded") {
+		t.Errorf("expected failure reason to contain 'context deadline exceeded', got %q", usage.GetFailureReason())
+	}
+}
+
+func TestDeleteContainer_ExtractTokenUsageTimeout_ProceedsWithTeardown(t *testing.T) {
+	origCommandRunner := commandRunner
+	defer func() { commandRunner = origCommandRunner }()
+
+	var deleteCalled bool
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "delete" {
+			deleteCalled = true
+			return []byte("deleted"), nil
+		}
+		if len(args) >= 4 && args[0] == "ssh" && args[2] == "--command" {
+			return nil, context.DeadlineExceeded
+		}
+		return []byte("ok"), nil
+	}
+
+	containerID := "test-container-timeout-teardown"
+	globalCache.Update(containerID, &proto.DevcontainerConfig{
+		Id:    containerID,
+		State: proto.State_DCM_READY,
+	})
+
+	err := deleteContainer("brotherlogic/devcontainer-manager", containerID)
+	if err != nil {
+		t.Fatalf("deleteContainer failed unexpectedly: %v", err)
+	}
+
+	if !deleteCalled {
+		t.Errorf("expected devpod delete command to be executed despite token extraction timeout")
+	}
+
+	if _, ok := globalCache.Get(containerID); ok {
+		t.Errorf("expected container %s to be deleted from globalCache", containerID)
+	}
+}
+
+func TestDeleteContainer_ExtractTokenUsageTimeout_WithIssueReport(t *testing.T) {
+	origCommandRunner := commandRunner
+	defer func() { commandRunner = origCommandRunner }()
+
+	origGHProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = origGHProvider }()
+
+	var commentCreated bool
+	var commentBody string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/issues/431/comments") && r.Method == http.MethodPost {
+			commentCreated = true
+			var comment struct {
+				Body string `json:"body"`
+			}
+			json.NewDecoder(r.Body).Decode(&comment)
+			commentBody = comment.Body
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			w.Write([]byte(`{"id": 12345}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	testClient := github.NewClient(nil)
+	baseURL, _ := url.Parse(server.URL + "/")
+	testClient.BaseURL = baseURL
+
+	gitHubClientProvider = func() (*github.Client, error) {
+		return testClient, nil
+	}
+
+	var deleteCalled bool
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "delete" {
+			deleteCalled = true
+			return []byte("deleted"), nil
+		}
+		if len(args) >= 4 && args[0] == "ssh" && args[2] == "--command" {
+			return nil, context.DeadlineExceeded
+		}
+		return []byte("ok"), nil
+	}
+
+	containerID := "issue-container-timeout"
+	globalCache.Update(containerID, &proto.DevcontainerConfig{
+		Id:    containerID,
+		State: proto.State_DCM_READY,
+		Request: &proto.UpRequest{
+			Repo: "brotherlogic/devcontainer-manager",
+			Identifier: &proto.Identifier{
+				Id: &proto.Identifier_IssueNumber{
+					IssueNumber: 431,
+				},
+			},
+		},
+	})
+
+	err := deleteContainer("brotherlogic/devcontainer-manager", containerID)
+	if err != nil {
+		t.Fatalf("deleteContainer failed unexpectedly: %v", err)
+	}
+
+	if !deleteCalled {
+		t.Errorf("expected devpod delete command to be executed")
+	}
+
+	if !commentCreated {
+		t.Errorf("expected token usage report comment to be posted")
+	}
+
+	if !strings.Contains(commentBody, "EXTRACTION_FAILED") || !strings.Contains(commentBody, "context deadline exceeded") {
+		t.Errorf("expected comment body to mention EXTRACTION_FAILED and context deadline exceeded, got: %s", commentBody)
+	}
+
+	if _, ok := globalCache.Get(containerID); ok {
+		t.Errorf("expected container %s to be deleted from globalCache", containerID)
+	}
+}
+
+
