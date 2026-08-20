@@ -1172,11 +1172,17 @@ func stopContainer(repo, id string) error {
 }
 
 func extractTokenUsage(ctx context.Context, repo, containerID string) *proto.TokenUsage {
+	// runCommandWithLog returns combined stdout/stderr output from devpod ssh execution.
 	out, err := runCommandWithLog(repo, devpodExe, "ssh", containerID, "--command", "cat /tmp/token_usage.json")
 	if err != nil {
+		outStr := strings.TrimSpace(string(out))
+		reason := err.Error()
+		if outStr != "" {
+			reason = fmt.Sprintf("%s: %s", err.Error(), outStr)
+		}
 		return &proto.TokenUsage{
 			Status:        proto.ExtractionStatus_EXTRACTION_FAILED,
-			FailureReason: err.Error(),
+			FailureReason: reason,
 		}
 	}
 
@@ -1190,7 +1196,8 @@ func extractTokenUsage(ctx context.Context, repo, containerID string) *proto.Tok
 		}
 	}
 
-	if val, parseErr := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64); parseErr == nil && val >= 0 {
+	outStr := strings.TrimSpace(string(out))
+	if val, parseErr := strconv.ParseInt(outStr, 10, 64); parseErr == nil && val >= 0 {
 		return &proto.TokenUsage{
 			TotalTokens: val,
 			Status:      proto.ExtractionStatus_EXTRACTION_SUCCESS,
@@ -1199,7 +1206,7 @@ func extractTokenUsage(ctx context.Context, repo, containerID string) *proto.Tok
 
 	return &proto.TokenUsage{
 		Status:        proto.ExtractionStatus_EXTRACTION_FAILED,
-		FailureReason: fmt.Sprintf("failed to parse token usage output: %s", string(out)),
+		FailureReason: fmt.Sprintf("failed to parse token usage output: %s", outStr),
 	}
 }
 
