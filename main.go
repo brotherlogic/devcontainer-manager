@@ -1189,7 +1189,7 @@ func extractTokenUsage(ctx context.Context, repo, containerID string) *proto.Tok
 	var data struct {
 		TotalTokens int64 `json:"total_tokens"`
 	}
-	if jsonErr := json.Unmarshal(out, &data); jsonErr == nil && data.TotalTokens > 0 {
+	if jsonErr := json.Unmarshal(out, &data); jsonErr == nil && data.TotalTokens >= 0 {
 		return &proto.TokenUsage{
 			TotalTokens: data.TotalTokens,
 			Status:      proto.ExtractionStatus_EXTRACTION_SUCCESS,
@@ -1197,7 +1197,7 @@ func extractTokenUsage(ctx context.Context, repo, containerID string) *proto.Tok
 	}
 
 	outStr := strings.TrimSpace(string(out))
-	if val, parseErr := strconv.ParseInt(outStr, 10, 64); parseErr == nil {
+	if val, parseErr := strconv.ParseInt(outStr, 10, 64); parseErr == nil && val >= 0 {
 		return &proto.TokenUsage{
 			TotalTokens: val,
 			Status:      proto.ExtractionStatus_EXTRACTION_SUCCESS,
