@@ -1172,8 +1172,21 @@ func stopContainer(repo, id string) error {
 }
 
 func extractTokenUsage(ctx context.Context, repo, containerID string) *proto.TokenUsage {
+	if ctx != nil && ctx.Err() != nil {
+		return &proto.TokenUsage{
+			Status:        proto.ExtractionStatus_EXTRACTION_FAILED,
+			FailureReason: ctx.Err().Error(),
+		}
+	}
+
 	// runCommandWithLog returns combined stdout/stderr output from devpod ssh execution.
 	out, err := runCommandWithLog(repo, devpodExe, "ssh", containerID, "--command", "cat /tmp/token_usage.json")
+	if ctx != nil && ctx.Err() != nil && err == nil {
+		return &proto.TokenUsage{
+			Status:        proto.ExtractionStatus_EXTRACTION_FAILED,
+			FailureReason: ctx.Err().Error(),
+		}
+	}
 	if err != nil {
 		outStr := strings.TrimSpace(string(out))
 		reason := err.Error()
@@ -1239,8 +1252,10 @@ func postTokenUsageReport(ctx context.Context, client *github.Client, owner, rep
 
 func deleteContainer(repo, id string) error {
 	ctx := context.Background()
+	extractCtx, extractCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer extractCancel()
 
-	usage := extractTokenUsage(ctx, repo, id)
+	usage := extractTokenUsage(extractCtx, repo, id)
 
 	var issueNumber int
 	var owner, repoName string
