@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -4516,5 +4517,245 @@ func TestDeleteContainer_ExtractTokenUsageTimeout_WithIssueReport(t *testing.T) 
 		t.Errorf("expected container %s to be deleted from globalCache", containerID)
 	}
 }
+
+func TestIsNotFoundError(t *testing.T) {
+	if isNotFoundError(nil, nil) {
+		t.Errorf("expected false for nil error and nil resp")
+	}
+
+	resp404 := &github.Response{Response: &http.Response{StatusCode: http.StatusNotFound}}
+	if !isNotFoundError(nil, resp404) {
+		t.Errorf("expected true for resp with 404 StatusCode")
+	}
+
+	resp403 := &github.Response{Response: &http.Response{StatusCode: http.StatusForbidden}}
+	if isNotFoundError(nil, resp403) {
+		t.Errorf("expected false for resp with 403 StatusCode")
+	}
+
+	err404 := &github.ErrorResponse{Response: &http.Response{StatusCode: http.StatusNotFound}}
+	if !isNotFoundError(err404, nil) {
+		t.Errorf("expected true for ErrorResponse with 404 StatusCode")
+	}
+
+	err403 := &github.ErrorResponse{Response: &http.Response{StatusCode: http.StatusForbidden}}
+	if isNotFoundError(err403, nil) {
+		t.Errorf("expected false for ErrorResponse with 403 StatusCode")
+	}
+
+	genericErr := errors.New("network error")
+	if isNotFoundError(genericErr, nil) {
+		t.Errorf("expected false for generic network error")
+	}
+}
+
+func TestGetFileSHA_NotFoundVsError(t *testing.T) {
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	mux.HandleFunc("/repos/owner/repo/contents/existing.sh", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"type":"file","sha":"sha123","name":"existing.sh"}`)
+	})
+
+	mux.HandleFunc("/repos/owner/repo/contents/missing.sh", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"message":"Not Found"}`)
+	})
+
+	mux.HandleFunc("/repos/owner/repo/contents/ratelimited.sh", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"message":"API rate limit exceeded"}`)
+	})
+
+	ctx := context.Background()
+
+	// 1. Existing file
+	sha, ok, err := getFileSHA(ctx, client, "owner", "repo", "existing.sh", "main")
+	if err != nil || !ok || sha != "sha123" {
+		t.Fatalf("expected sha123, ok=true, err=nil, got sha=%s, ok=%v, err=%v", sha, ok, err)
+	}
+
+	// 2. Missing file (404) -> ok=false, err=nil
+	sha, ok, err = getFileSHA(ctx, client, "owner", "repo", "missing.sh", "main")
+	if err != nil || ok || sha != "" {
+		t.Fatalf("expected empty sha, ok=false, err=nil for 404, got sha=%s, ok=%v, err=%v", sha, ok, err)
+	}
+
+	// 3. Rate limited file (403) -> ok=false, err!=nil
+	sha, ok, err = getFileSHA(ctx, client, "owner", "repo", "ratelimited.sh", "main")
+	if err == nil || ok || sha != "" {
+		t.Fatalf("expected error on 403, got sha=%s, ok=%v, err=%v", sha, ok, err)
+	}
+}
+
+func TestGetRepoCompositeSHA_TransientErrors(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("success with scripts", func(t *testing.T) {
+		mux := http.NewServeMux()
+		server := httptest.NewServer(mux)
+		defer server.Close()
+
+		client := github.NewClient(nil)
+		u, _ := url.Parse(server.URL + "/")
+		client.BaseURL = u
+		client.UploadURL = u
+
+		devcontainerJSON := `{"postCreateCommand": "postCreate.sh"}`
+		encodedJSON := base64.StdEncoding.EncodeToString([]byte(devcontainerJSON))
+
+		mux.HandleFunc("/repos/owner/repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"type":"file","sha":"devsha","content":"%s","encoding":"base64"}`, encodedJSON)
+		})
+
+		mux.HandleFunc("/repos/owner/repo/contents/postCreate.sh", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"type":"file","sha":"scriptsha"}`)
+		})
+
+		compositeSHA, found, err := getRepoCompositeSHA(ctx, client, "owner/repo", "main")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !found {
+			t.Fatalf("expected found=true")
+		}
+		expectedSHA := "devcontainer.json:devsha|postCreate.sh:scriptsha"
+		if compositeSHA != expectedSHA {
+			t.Errorf("expected compositeSHA %q, got %q", expectedSHA, compositeSHA)
+		}
+	})
+
+	t.Run("404 devcontainer.json returns found=false, err=nil", func(t *testing.T) {
+		mux := http.NewServeMux()
+		server := httptest.NewServer(mux)
+		defer server.Close()
+
+		client := github.NewClient(nil)
+		u, _ := url.Parse(server.URL + "/")
+		client.BaseURL = u
+		client.UploadURL = u
+
+		mux.HandleFunc("/repos/owner/repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		})
+		mux.HandleFunc("/repos/owner/repo/contents/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		})
+
+		compositeSHA, found, err := getRepoCompositeSHA(ctx, client, "owner/repo", "main")
+		if err != nil {
+			t.Fatalf("expected err=nil for 404, got %v", err)
+		}
+		if found {
+			t.Fatalf("expected found=false, got compositeSHA=%s", compositeSHA)
+		}
+	})
+
+	t.Run("403 error on devcontainer.json returns err!=nil", func(t *testing.T) {
+		mux := http.NewServeMux()
+		server := httptest.NewServer(mux)
+		defer server.Close()
+
+		client := github.NewClient(nil)
+		u, _ := url.Parse(server.URL + "/")
+		client.BaseURL = u
+		client.UploadURL = u
+
+		mux.HandleFunc("/repos/owner/repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"message":"API rate limit exceeded"}`)
+		})
+
+		_, _, err := getRepoCompositeSHA(ctx, client, "owner/repo", "main")
+		if err == nil {
+			t.Fatalf("expected error on 403 fetching devcontainer.json, got nil")
+		}
+	})
+
+	t.Run("403 error on script returns err!=nil and prevents partial hash", func(t *testing.T) {
+		mux := http.NewServeMux()
+		server := httptest.NewServer(mux)
+		defer server.Close()
+
+		client := github.NewClient(nil)
+		u, _ := url.Parse(server.URL + "/")
+		client.BaseURL = u
+		client.UploadURL = u
+
+		devcontainerJSON := `{"postCreateCommand": "postCreate.sh"}`
+		encodedJSON := base64.StdEncoding.EncodeToString([]byte(devcontainerJSON))
+
+		mux.HandleFunc("/repos/owner/repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"type":"file","sha":"devsha","content":"%s","encoding":"base64"}`, encodedJSON)
+		})
+
+		mux.HandleFunc("/repos/owner/repo/contents/postCreate.sh", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"message":"API rate limit exceeded"}`)
+		})
+
+		_, _, err := getRepoCompositeSHA(ctx, client, "owner/repo", "main")
+		if err == nil {
+			t.Fatalf("expected error on 403 fetching script, got nil")
+		}
+		if !strings.Contains(err.Error(), "postCreate.sh") {
+			t.Errorf("expected error to mention script path, got: %v", err)
+		}
+	})
+
+	t.Run("403 error on fallback script returns err!=nil", func(t *testing.T) {
+		mux := http.NewServeMux()
+		server := httptest.NewServer(mux)
+		defer server.Close()
+
+		client := github.NewClient(nil)
+		u, _ := url.Parse(server.URL + "/")
+		client.BaseURL = u
+		client.UploadURL = u
+
+		devcontainerJSON := `{"postCreateCommand": "postCreate.sh"}`
+		encodedJSON := base64.StdEncoding.EncodeToString([]byte(devcontainerJSON))
+
+		mux.HandleFunc("/repos/owner/repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"type":"file","sha":"devsha","content":"%s","encoding":"base64"}`, encodedJSON)
+		})
+
+		mux.HandleFunc("/repos/owner/repo/contents/postCreate.sh", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		})
+
+		mux.HandleFunc("/repos/owner/repo/contents/.devcontainer/postCreate.sh", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"message":"API rate limit exceeded"}`)
+		})
+
+		_, _, err := getRepoCompositeSHA(ctx, client, "owner/repo", "main")
+		if err == nil {
+			t.Fatalf("expected error on 403 fetching fallback script, got nil")
+		}
+		if !strings.Contains(err.Error(), ".devcontainer/postCreate.sh") {
+			t.Errorf("expected error to mention fallback script path, got: %v", err)
+		}
+	})
+}
+
 
 

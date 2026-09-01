@@ -11,7 +11,7 @@
 *   **Fresh Issue Containers:** Forces devpod to recreate issue containers to always pull the freshest container config from head, bypassing the local cache.
 *   **GitHub Issue Devcontainers:** Automatically provisions dedicated devcontainers for open issues containing `seraphine` labels, querying both issue metadata and bodies to deduplicate container reports, and handling state labels (`container-creating`, `container-ready`, `container-failed`, `container-asleep`) dynamically with explicit logging of adjustment reasons.
 *   **Container Prioritization:** Dynamically orders container startup operations, prioritizing repositories that have been most recently updated (pushed) on GitHub.
-*   **Deterministic Caching:** Minimizes rebuild times by storing composite SHAs of configurations and script dependencies in a state cache.
+*   **Deterministic Caching & Resilient Sync:** Minimizes rebuild times by storing composite SHAs of configurations and script dependencies in a state cache. Distinguishes 404 Not Found from transient GitHub API errors (e.g. 403 rate limits, 429s, 5xx errors) to prevent calculating partial hashes and triggering false container recreations.
 *   **Deterministic Branch Slugs:** Generates consistent, 3-word branch names from issue titles locally without relying on external APIs, preventing provisioning failures caused by network timeouts or empty LLM outputs.
 *   **Automatic SSH Mapping:** Assigns unique SSH ports to workspaces, facilitating reverse-proxy routing via systems like `dcrouter`.
 *   **Startup Command Injection:** Polls containers via SSH until they are ready, then automatically injects execution commands into the container's active tmux session.
