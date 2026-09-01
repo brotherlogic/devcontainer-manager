@@ -1655,6 +1655,22 @@ func extractScriptsViaRegex(content string) []string {
 	return finalResult
 }
 
+// isNotFoundError checks whether a GitHub API error or response indicates an HTTP 404 Not Found.
+func isNotFoundError(err error, resp *github.Response) bool {
+	if resp != nil && resp.StatusCode == http.StatusNotFound {
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	var errResp *github.ErrorResponse
+	if errors.As(err, &errResp) && errResp.Response != nil {
+		return errResp.Response.StatusCode == http.StatusNotFound
+	}
+	return false
+}
+
+// fetchFileContent retrieves the content and SHA of a repository file, returning an error if retrieval fails.
 func fetchFileContent(ctx context.Context, client *github.Client, owner, repo, path string, ref string) (string, string, error) {
 	var opts *github.RepositoryContentGetOptions
 	if ref != "" {
@@ -1664,6 +1680,9 @@ func fetchFileContent(ctx context.Context, client *github.Client, owner, repo, p
 	if err != nil {
 		return "", "", err
 	}
+	if fileContent == nil {
+		return "", "", fmt.Errorf("file %s not found or not a regular file", path)
+	}
 	content, err := fileContent.GetContent()
 	if err != nil {
 		return "", "", err
@@ -1671,25 +1690,29 @@ func fetchFileContent(ctx context.Context, client *github.Client, owner, repo, p
 	return content, fileContent.GetSHA(), nil
 }
 
-func getFileSHA(ctx context.Context, client *github.Client, owner, repoName, path string, ref string) (string, bool) {
+// getFileSHA retrieves the SHA of a repository file. If the file does not exist (404), it returns ("", false, nil).
+// If a transient API error occurs (e.g. 403 rate limit, 429, 5xx), it returns ("", false, err) to prevent calculating partial composite hashes.
+func getFileSHA(ctx context.Context, client *github.Client, owner, repoName, path string, ref string) (string, bool, error) {
 	var opts *github.RepositoryContentGetOptions
 	if ref != "" {
 		opts = &github.RepositoryContentGetOptions{Ref: ref}
 	}
 	fileContent, _, resp, err := client.Repositories.GetContents(ctx, owner, repoName, path, opts)
 	if err != nil {
-		if resp != nil && resp.StatusCode == 404 {
-			return "", false
+		if isNotFoundError(err, resp) {
+			return "", false, nil
 		}
 		log.Printf("Warning: failed to get contents for %s/%s at %s: %v", owner, repoName, path, err)
-		return "", false
+		return "", false, err
 	}
 	if fileContent == nil {
-		return "", false
+		return "", false, nil
 	}
-	return fileContent.GetSHA(), true
+	return fileContent.GetSHA(), true, nil
 }
 
+// getRepoCompositeSHA calculates a composite hash of devcontainer configuration and script dependencies.
+// It fails and returns an error if any transient API error occurs during file or script retrieval, ensuring containers are not falsely recreated.
 func getRepoCompositeSHA(ctx context.Context, client *github.Client, repo string, ref string) (string, bool, error) {
 	parts := strings.Split(repo, "/")
 	if len(parts) != 2 {
@@ -1706,13 +1729,17 @@ func getRepoCompositeSHA(ctx context.Context, client *github.Client, repo string
 		devcontainerJSON = content
 		devcontainerSHA = sha
 		found = true
-	} else {
+	} else if isNotFoundError(err, nil) {
 		content, sha, err = fetchFileContent(ctx, client, owner, repoName, "devcontainer.json", ref)
 		if err == nil {
 			devcontainerJSON = content
 			devcontainerSHA = sha
 			found = true
+		} else if !isNotFoundError(err, nil) {
+			return "", false, fmt.Errorf("failed to fetch devcontainer.json: %w", err)
 		}
+	} else {
+		return "", false, fmt.Errorf("failed to fetch .devcontainer/devcontainer.json: %w", err)
 	}
 
 	if !found {
@@ -1725,11 +1752,19 @@ func getRepoCompositeSHA(ctx context.Context, client *github.Client, repo string
 
 	scripts := extractScriptsFromJSON(devcontainerJSON)
 	for _, scriptPath := range scripts {
-		if sha, ok := getFileSHA(ctx, client, owner, repoName, scriptPath, ref); ok {
+		sha, ok, err := getFileSHA(ctx, client, owner, repoName, scriptPath, ref)
+		if err != nil {
+			return "", false, fmt.Errorf("failed to get SHA for script %s: %w", scriptPath, err)
+		}
+		if ok {
 			shaMap[scriptPath] = sha
 		} else {
 			fallbackPath := path.Join(".devcontainer", scriptPath)
-			if sha, ok := getFileSHA(ctx, client, owner, repoName, fallbackPath, ref); ok {
+			sha, ok, err := getFileSHA(ctx, client, owner, repoName, fallbackPath, ref)
+			if err != nil {
+				return "", false, fmt.Errorf("failed to get SHA for fallback script %s: %w", fallbackPath, err)
+			}
+			if ok {
 				shaMap[fallbackPath] = sha
 			}
 		}
