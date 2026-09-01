@@ -1655,6 +1655,7 @@ func extractScriptsViaRegex(content string) []string {
 	return finalResult
 }
 
+// isNotFoundError checks whether a GitHub API error or response indicates an HTTP 404 Not Found.
 func isNotFoundError(err error, resp *github.Response) bool {
 	if resp != nil && resp.StatusCode == http.StatusNotFound {
 		return true
@@ -1669,6 +1670,7 @@ func isNotFoundError(err error, resp *github.Response) bool {
 	return false
 }
 
+// fetchFileContent retrieves the content and SHA of a repository file, returning an error if retrieval fails.
 func fetchFileContent(ctx context.Context, client *github.Client, owner, repo, path string, ref string) (string, string, error) {
 	var opts *github.RepositoryContentGetOptions
 	if ref != "" {
@@ -1688,6 +1690,8 @@ func fetchFileContent(ctx context.Context, client *github.Client, owner, repo, p
 	return content, fileContent.GetSHA(), nil
 }
 
+// getFileSHA retrieves the SHA of a repository file. If the file does not exist (404), it returns ("", false, nil).
+// If a transient API error occurs (e.g. 403 rate limit, 429, 5xx), it returns ("", false, err) to prevent calculating partial composite hashes.
 func getFileSHA(ctx context.Context, client *github.Client, owner, repoName, path string, ref string) (string, bool, error) {
 	var opts *github.RepositoryContentGetOptions
 	if ref != "" {
@@ -1707,6 +1711,8 @@ func getFileSHA(ctx context.Context, client *github.Client, owner, repoName, pat
 	return fileContent.GetSHA(), true, nil
 }
 
+// getRepoCompositeSHA calculates a composite hash of devcontainer configuration and script dependencies.
+// It fails and returns an error if any transient API error occurs during file or script retrieval, ensuring containers are not falsely recreated.
 func getRepoCompositeSHA(ctx context.Context, client *github.Client, repo string, ref string) (string, bool, error) {
 	parts := strings.Split(repo, "/")
 	if len(parts) != 2 {
