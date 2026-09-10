@@ -1171,12 +1171,15 @@ func stopContainer(repo, id string) error {
 	return nil
 }
 
+func tokenExtractionCmdDesc(containerID string) string {
+	return fmt.Sprintf("%s ssh %s --command \"cat /tmp/token_usage.json\"", devpodExe, containerID)
+}
+
 func extractTokenUsage(ctx context.Context, repo, containerID string) *proto.TokenUsage {
-	cmdDesc := fmt.Sprintf("%s ssh %s --command \"cat /tmp/token_usage.json\"", devpodExe, containerID)
 	if ctx != nil && ctx.Err() != nil {
 		return &proto.TokenUsage{
 			Status:        proto.ExtractionStatus_EXTRACTION_FAILED,
-			FailureReason: fmt.Sprintf("%s canceled or timed out: %v", cmdDesc, ctx.Err()),
+			FailureReason: fmt.Sprintf("%s canceled or timed out: %v", tokenExtractionCmdDesc(containerID), ctx.Err()),
 		}
 	}
 
@@ -1185,11 +1188,12 @@ func extractTokenUsage(ctx context.Context, repo, containerID string) *proto.Tok
 	if ctx != nil && ctx.Err() != nil && err == nil {
 		return &proto.TokenUsage{
 			Status:        proto.ExtractionStatus_EXTRACTION_FAILED,
-			FailureReason: fmt.Sprintf("%s canceled or timed out: %v", cmdDesc, ctx.Err()),
+			FailureReason: fmt.Sprintf("%s canceled or timed out: %v", tokenExtractionCmdDesc(containerID), ctx.Err()),
 		}
 	}
 	if err != nil {
 		outStr := strings.TrimSpace(string(out))
+		cmdDesc := tokenExtractionCmdDesc(containerID)
 		var reason string
 		if outStr != "" {
 			reason = fmt.Sprintf("command '%s' failed (%v): %s", cmdDesc, err, outStr)
@@ -1220,6 +1224,7 @@ func extractTokenUsage(ctx context.Context, repo, containerID string) *proto.Tok
 		}
 	}
 
+	cmdDesc := tokenExtractionCmdDesc(containerID)
 	if outStr == "" {
 		return &proto.TokenUsage{
 			Status:        proto.ExtractionStatus_EXTRACTION_FAILED,
