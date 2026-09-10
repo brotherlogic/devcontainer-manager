@@ -4215,7 +4215,7 @@ func TestExtractTokenUsage_CommandErrorWithStderr(t *testing.T) {
 	if usage.GetStatus() != proto.ExtractionStatus_EXTRACTION_FAILED {
 		t.Errorf("expected status EXTRACTION_FAILED, got %v", usage.GetStatus())
 	}
-	expectedReason := "exit status 1: cat: /tmp/token_usage.json: No such file or directory"
+	expectedReason := fmt.Sprintf("command '%s ssh container-123 --command \"cat /tmp/token_usage.json\"' failed (exit status 1): cat: /tmp/token_usage.json: No such file or directory", devpodExe)
 	if usage.GetFailureReason() != expectedReason {
 		t.Errorf("expected FailureReason %q, got %q", expectedReason, usage.GetFailureReason())
 	}
@@ -4236,7 +4236,49 @@ func TestExtractTokenUsage_CommandErrorWithoutStderr(t *testing.T) {
 	if usage.GetStatus() != proto.ExtractionStatus_EXTRACTION_FAILED {
 		t.Errorf("expected status EXTRACTION_FAILED, got %v", usage.GetStatus())
 	}
-	expectedReason := "connection timeout"
+	expectedReason := fmt.Sprintf("command '%s ssh container-123 --command \"cat /tmp/token_usage.json\"' failed (connection timeout) with no output", devpodExe)
+	if usage.GetFailureReason() != expectedReason {
+		t.Errorf("expected FailureReason %q, got %q", expectedReason, usage.GetFailureReason())
+	}
+}
+
+func TestExtractTokenUsage_ExitStatus1_EmptyOutput_DetailedDiagnostics(t *testing.T) {
+	origCommandRunner := commandRunner
+	defer func() { commandRunner = origCommandRunner }()
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		return []byte(""), fmt.Errorf("exit status 1")
+	}
+
+	usage := extractTokenUsage(context.Background(), "test-repo", "rose-26")
+	if usage == nil {
+		t.Fatalf("expected non-nil TokenUsage")
+	}
+	if usage.GetStatus() != proto.ExtractionStatus_EXTRACTION_FAILED {
+		t.Errorf("expected status EXTRACTION_FAILED, got %v", usage.GetStatus())
+	}
+	expectedReason := fmt.Sprintf("command '%s ssh rose-26 --command \"cat /tmp/token_usage.json\"' failed (exit status 1) with no output", devpodExe)
+	if usage.GetFailureReason() != expectedReason {
+		t.Errorf("expected FailureReason %q, got %q", expectedReason, usage.GetFailureReason())
+	}
+}
+
+func TestExtractTokenUsage_CommandSucceeded_EmptyOutput(t *testing.T) {
+	origCommandRunner := commandRunner
+	defer func() { commandRunner = origCommandRunner }()
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		return []byte("   \n"), nil
+	}
+
+	usage := extractTokenUsage(context.Background(), "test-repo", "container-123")
+	if usage == nil {
+		t.Fatalf("expected non-nil TokenUsage")
+	}
+	if usage.GetStatus() != proto.ExtractionStatus_EXTRACTION_FAILED {
+		t.Errorf("expected status EXTRACTION_FAILED, got %v", usage.GetStatus())
+	}
+	expectedReason := fmt.Sprintf("command '%s ssh container-123 --command \"cat /tmp/token_usage.json\"' succeeded but returned empty output", devpodExe)
 	if usage.GetFailureReason() != expectedReason {
 		t.Errorf("expected FailureReason %q, got %q", expectedReason, usage.GetFailureReason())
 	}
@@ -4257,7 +4299,7 @@ func TestExtractTokenUsage_MalformedOutput(t *testing.T) {
 	if usage.GetStatus() != proto.ExtractionStatus_EXTRACTION_FAILED {
 		t.Errorf("expected status EXTRACTION_FAILED, got %v", usage.GetStatus())
 	}
-	expectedReason := "failed to parse token usage output: invalid token format"
+	expectedReason := fmt.Sprintf("failed to parse token usage output from command '%s ssh container-123 --command \"cat /tmp/token_usage.json\"': invalid token format", devpodExe)
 	if usage.GetFailureReason() != expectedReason {
 		t.Errorf("expected FailureReason %q, got %q", expectedReason, usage.GetFailureReason())
 	}

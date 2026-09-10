@@ -1172,10 +1172,11 @@ func stopContainer(repo, id string) error {
 }
 
 func extractTokenUsage(ctx context.Context, repo, containerID string) *proto.TokenUsage {
+	cmdDesc := fmt.Sprintf("%s ssh %s --command \"cat /tmp/token_usage.json\"", devpodExe, containerID)
 	if ctx != nil && ctx.Err() != nil {
 		return &proto.TokenUsage{
 			Status:        proto.ExtractionStatus_EXTRACTION_FAILED,
-			FailureReason: ctx.Err().Error(),
+			FailureReason: fmt.Sprintf("%s canceled or timed out: %v", cmdDesc, ctx.Err()),
 		}
 	}
 
@@ -1184,14 +1185,16 @@ func extractTokenUsage(ctx context.Context, repo, containerID string) *proto.Tok
 	if ctx != nil && ctx.Err() != nil && err == nil {
 		return &proto.TokenUsage{
 			Status:        proto.ExtractionStatus_EXTRACTION_FAILED,
-			FailureReason: ctx.Err().Error(),
+			FailureReason: fmt.Sprintf("%s canceled or timed out: %v", cmdDesc, ctx.Err()),
 		}
 	}
 	if err != nil {
 		outStr := strings.TrimSpace(string(out))
-		reason := err.Error()
+		var reason string
 		if outStr != "" {
-			reason = fmt.Sprintf("%s: %s", err.Error(), outStr)
+			reason = fmt.Sprintf("command '%s' failed (%v): %s", cmdDesc, err, outStr)
+		} else {
+			reason = fmt.Sprintf("command '%s' failed (%v) with no output", cmdDesc, err)
 		}
 		return &proto.TokenUsage{
 			Status:        proto.ExtractionStatus_EXTRACTION_FAILED,
@@ -1217,9 +1220,16 @@ func extractTokenUsage(ctx context.Context, repo, containerID string) *proto.Tok
 		}
 	}
 
+	if outStr == "" {
+		return &proto.TokenUsage{
+			Status:        proto.ExtractionStatus_EXTRACTION_FAILED,
+			FailureReason: fmt.Sprintf("command '%s' succeeded but returned empty output", cmdDesc),
+		}
+	}
+
 	return &proto.TokenUsage{
 		Status:        proto.ExtractionStatus_EXTRACTION_FAILED,
-		FailureReason: fmt.Sprintf("failed to parse token usage output: %s", outStr),
+		FailureReason: fmt.Sprintf("failed to parse token usage output from command '%s': %s", cmdDesc, outStr),
 	}
 }
 
