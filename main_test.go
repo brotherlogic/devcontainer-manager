@@ -1639,7 +1639,7 @@ func TestListOpenIssuesProvider_Success(t *testing.T) {
 		t.Errorf("expected commandName 'gh', got '%s'", commandName)
 	}
 
-	expectedArgs := []string{"issue", "list", "-R", "brotherlogic/devcontainer-manager", "--state", "open", "--json", "number,title,labels,assignees,body"}
+	expectedArgs := []string{"issue", "list", "-R", "brotherlogic/devcontainer-manager", "--state", "open", "--search", "assignee:*", "--limit", "300", "--json", "number,title,labels,assignees,body"}
 	if len(commandArgs) != len(expectedArgs) {
 		t.Fatalf("expected %d args, got %d", len(expectedArgs), len(commandArgs))
 	}
@@ -1699,7 +1699,7 @@ func TestListOpenIssuesProvider_WithBody(t *testing.T) {
 		t.Errorf("expected commandName 'gh', got '%s'", commandName)
 	}
 
-	expectedArgs := []string{"issue", "list", "-R", "brotherlogic/devcontainer-manager", "--state", "open", "--json", "number,title,labels,assignees,body"}
+	expectedArgs := []string{"issue", "list", "-R", "brotherlogic/devcontainer-manager", "--state", "open", "--search", "assignee:*", "--limit", "300", "--json", "number,title,labels,assignees,body"}
 	if len(commandArgs) != len(expectedArgs) {
 		t.Fatalf("expected %d args, got %d", len(expectedArgs), len(commandArgs))
 	}
@@ -1714,6 +1714,55 @@ func TestListOpenIssuesProvider_WithBody(t *testing.T) {
 	}
 	if issues[0].GetBody() != "This is the body of the issue" {
 		t.Errorf("expected body 'This is the body of the issue', got '%s'", issues[0].GetBody())
+	}
+}
+
+func TestListOpenIssuesProvider_Fallback(t *testing.T) {
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		return nil, fmt.Errorf("gh command failed")
+	}
+
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	var capturedState, capturedAssignee string
+	mux.HandleFunc("/repos/brotherlogic/devcontainer-manager/issues", func(w http.ResponseWriter, r *http.Request) {
+		capturedState = r.URL.Query().Get("state")
+		capturedAssignee = r.URL.Query().Get("assignee")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `[
+			{
+				"number": 170,
+				"title": "Fallback issue",
+				"assignee": {"login": "brotherlogic-automation"}
+			}
+		]`)
+	})
+
+	issues, err := listOpenIssuesProvider(context.Background(), client, "brotherlogic", "devcontainer-manager")
+	if err != nil {
+		t.Fatalf("expected no error from fallback, got %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 issue, got %d", len(issues))
+	}
+	if issues[0].GetNumber() != 170 {
+		t.Errorf("expected issue 170, got %d", issues[0].GetNumber())
+	}
+	if capturedState != "open" {
+		t.Errorf("expected state 'open', got '%s'", capturedState)
+	}
+	if capturedAssignee != "*" {
+		t.Errorf("expected assignee '*', got '%s'", capturedAssignee)
 	}
 }
 

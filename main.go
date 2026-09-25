@@ -200,7 +200,7 @@ var gitHubClientProvider = getGHClient
 
 var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, owner, repoName string) ([]*github.Issue, error) {
 	repoPath := fmt.Sprintf("%s/%s", owner, repoName)
-	out, err := commandRunner("gh", "issue", "list", "-R", repoPath, "--state", "open", "--json", "number,title,labels,assignees,body")
+	out, err := commandRunner("gh", "issue", "list", "-R", repoPath, "--state", "open", "--search", "assignee:*", "--limit", "300", "--json", "number,title,labels,assignees,body")
 	if err == nil {
 		var rawIssues []struct {
 			Number int    `json:"number"`
@@ -256,7 +256,10 @@ var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, ow
 
 	if client != nil {
 		log.Printf("Falling back to GitHub HTTP API to list open issues for %s", repoPath)
-		opts := &github.IssueListByRepoOptions{State: "open"}
+		opts := &github.IssueListByRepoOptions{
+			State:    "open",
+			Assignee: "*",
+		}
 		issues, _, errAPI := client.Issues.ListByRepo(ctx, owner, repoName, opts)
 		return issues, errAPI
 	}
