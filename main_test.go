@@ -1734,10 +1734,11 @@ func TestListOpenIssuesProvider_Fallback(t *testing.T) {
 	client.BaseURL = u
 	client.UploadURL = u
 
-	var capturedState, capturedAssignee string
+	var capturedState, capturedAssignee, capturedPerPage string
 	mux.HandleFunc("/repos/brotherlogic/devcontainer-manager/issues", func(w http.ResponseWriter, r *http.Request) {
 		capturedState = r.URL.Query().Get("state")
 		capturedAssignee = r.URL.Query().Get("assignee")
+		capturedPerPage = r.URL.Query().Get("per_page")
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `[
 			{
@@ -1763,6 +1764,9 @@ func TestListOpenIssuesProvider_Fallback(t *testing.T) {
 	}
 	if capturedAssignee != "*" {
 		t.Errorf("expected assignee '*', got '%s'", capturedAssignee)
+	}
+	if capturedPerPage != "100" {
+		t.Errorf("expected per_page '100', got '%s'", capturedPerPage)
 	}
 }
 
