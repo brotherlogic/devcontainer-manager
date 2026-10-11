@@ -121,18 +121,27 @@ func findPeerIssueContainers(workspaces []DevpodWorkspace, targetID string, proj
 	return peers
 }
 
+// parsePeerID extracts the base workspace prefix and issue number from a peer container ID formatted as <baseID>-<issueNum>.
+func parsePeerID(peerID string) (string, int, bool) {
+	lastIdx := strings.LastIndex(peerID, "-")
+	if lastIdx == -1 {
+		return "", 0, false
+	}
+	issueNum, err := strconv.Atoi(peerID[lastIdx+1:])
+	if err != nil || issueNum <= 0 {
+		return "", 0, false
+	}
+	return peerID[:lastIdx], issueNum, true
+}
+
 func findPeerTmuxSession(repo, peerID string) (string, error) {
 	sessionName := peerID
-	out, err := runCommandWithLog(repo, devpodExe, "ssh", peerID, "--command", fmt.Sprintf("tmux has-session -t %s", peerID))
+	out, err := runCommandWithLog(repo, devpodExe, "ssh", peerID, "--command", fmt.Sprintf("tmux has-session -t %s", shellQuote(peerID)))
 	if err != nil {
-		lastIdx := strings.LastIndex(peerID, "-")
-		if lastIdx != -1 {
-			if _, errNum := strconv.Atoi(peerID[lastIdx+1:]); errNum == nil {
-				baseID := peerID[:lastIdx]
-				_, fallbackErr := runCommandWithLog(repo, devpodExe, "ssh", peerID, "--command", fmt.Sprintf("tmux has-session -t %s", baseID))
-				if fallbackErr == nil {
-					return baseID, nil
-				}
+		if baseID, _, ok := parsePeerID(peerID); ok {
+			_, fallbackErr := runCommandWithLog(repo, devpodExe, "ssh", peerID, "--command", fmt.Sprintf("tmux has-session -t %s", shellQuote(baseID)))
+			if fallbackErr == nil {
+				return baseID, nil
 			}
 		}
 		return "", fmt.Errorf("tmux session check failed: %w (output: %s)", err, strings.TrimSpace(string(out)))
@@ -167,18 +176,17 @@ func pollPeerTmuxSession(ctx context.Context, repo, peerID string) (string, erro
 func ensureContainerAsleepLabel(ctx context.Context, repo, peerID string) {
 	owner, repoName, err := parseOwnerRepo(repo)
 	if err != nil {
+		logWithPrefix(repo, "Warning: failed to parse owner/repo from %s for asleep peer %s: %v", repo, peerID, err)
 		return
 	}
-	lastIdx := strings.LastIndex(peerID, "-")
-	if lastIdx == -1 {
-		return
-	}
-	peerIssueNum, err := strconv.Atoi(peerID[lastIdx+1:])
-	if err != nil || peerIssueNum <= 0 {
+	_, peerIssueNum, ok := parsePeerID(peerID)
+	if !ok {
+		logWithPrefix(repo, "Warning: failed to parse issue number from peer ID %s to retain container-asleep label", peerID)
 		return
 	}
 	client, err := gitHubClientProvider()
 	if err != nil || client == nil {
+		logWithPrefix(repo, "Warning: failed to get GitHub client to retain container-asleep label for issue %d: %v", peerIssueNum, err)
 		return
 	}
 	adjustIssueLabels(ctx, client, owner, repoName, peerIssueNum, "container-asleep", []string{"container-creating", "container-ready", "container-failed"}, "retaining container-asleep label after peer notification")
