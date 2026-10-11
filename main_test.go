@@ -4892,10 +4892,9 @@ func TestNotifyPeerContainers_ActivePeer(t *testing.T) {
 		return []byte("success"), nil
 	}
 
-	peers := []string{"repo-101", "repo-102"}
+	peers := []string{"repo-101"}
 	running := map[string]bool{
 		"repo-101": true,
-		"repo-102": false,
 	}
 
 	notifyPeerContainers(context.Background(), "owner/repo", peers, running, 99)
@@ -4904,22 +4903,202 @@ func TestNotifyPeerContainers_ActivePeer(t *testing.T) {
 	defer mu.Unlock()
 
 	var sentKeysTo101 bool
-	var sentKeysTo102 bool
+	var devpodUpCalled bool
+	var devpodStopCalled bool
 	for _, cmd := range capturedCommands {
 		cmdStr := strings.Join(cmd, " ")
 		if strings.Contains(cmdStr, "tmux send-keys") && strings.Contains(cmdStr, "repo-101") && strings.Contains(cmdStr, "Issue #99 has been closed") {
 			sentKeysTo101 = true
 		}
-		if strings.Contains(cmdStr, "tmux send-keys") && strings.Contains(cmdStr, "repo-102") {
-			sentKeysTo102 = true
+		if strings.Contains(cmdStr, "devpod up") {
+			devpodUpCalled = true
+		}
+		if strings.Contains(cmdStr, "devpod stop") {
+			devpodStopCalled = true
 		}
 	}
 
 	if !sentKeysTo101 {
 		t.Errorf("expected tmux send-keys to be called for active peer repo-101 with close prompt, but was not")
 	}
-	if sentKeysTo102 {
-		t.Errorf("expected tmux send-keys NOT to be called for inactive peer repo-102, but it was")
+	if devpodUpCalled {
+		t.Errorf("expected devpod up NOT to be called for active peer repo-101, but it was")
+	}
+	if devpodStopCalled {
+		t.Errorf("expected devpod stop NOT to be called for active peer repo-101, but it was")
+	}
+}
+
+func TestNotifyPeerContainers_AsleepPeer(t *testing.T) {
+	oldInterval := pollingInterval
+	oldTimeout := pollingTimeout
+	pollingInterval = 1 * time.Millisecond
+	pollingTimeout = 100 * time.Millisecond
+	defer func() {
+		pollingInterval = oldInterval
+		pollingTimeout = oldTimeout
+	}()
+
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	var mu sync.Mutex
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		mu.Lock()
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		mu.Unlock()
+		return []byte("success"), nil
+	}
+
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+
+	var issueGetCalled bool
+	mux.HandleFunc("/repos/owner/repo/issues/102", func(w http.ResponseWriter, r *http.Request) {
+		issueGetCalled = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"number": 102, "state": "open", "labels": [{"name": "container-asleep"}]}`)
+	})
+
+	peers := []string{"repo-102"}
+	running := map[string]bool{
+		"repo-102": false,
+	}
+
+	notifyPeerContainers(context.Background(), "owner/repo", peers, running, 99)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	var wakeIdx, promptIdx, stopIdx int = -1, -1, -1
+	for idx, cmd := range capturedCommands {
+		cmdStr := strings.Join(cmd, " ")
+		if strings.Contains(cmdStr, "devpod up repo-102 --ide none") {
+			wakeIdx = idx
+		}
+		if strings.Contains(cmdStr, "tmux send-keys") && strings.Contains(cmdStr, "Issue #99 has been closed") {
+			promptIdx = idx
+		}
+		if strings.Contains(cmdStr, "devpod stop repo-102") {
+			stopIdx = idx
+		}
+	}
+
+	if wakeIdx == -1 {
+		t.Errorf("expected wake command (devpod up repo-102 --ide none), but was not called")
+	}
+	if promptIdx == -1 {
+		t.Errorf("expected prompt injection (tmux send-keys with 'Issue #99 has been closed'), but was not called")
+	}
+	if stopIdx == -1 {
+		t.Errorf("expected re-stop command (devpod stop repo-102), but was not called")
+	}
+
+	if wakeIdx != -1 && promptIdx != -1 && stopIdx != -1 {
+		if !(wakeIdx < promptIdx && promptIdx < stopIdx) {
+			t.Errorf("expected sequence wake < prompt < stop, got wakeIdx=%d, promptIdx=%d, stopIdx=%d", wakeIdx, promptIdx, stopIdx)
+		}
+	}
+
+	if !issueGetCalled {
+		t.Errorf("expected label preservation check for issue 102, but issue was not fetched")
+	}
+}
+
+func TestNotifyPeerContainers_ErrorResilience(t *testing.T) {
+	oldInterval := pollingInterval
+	oldTimeout := pollingTimeout
+	pollingInterval = 1 * time.Millisecond
+	pollingTimeout = 20 * time.Millisecond
+	defer func() {
+		pollingInterval = oldInterval
+		pollingTimeout = oldTimeout
+	}()
+
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+
+	var capturedCommands [][]string
+	var mu sync.Mutex
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		mu.Lock()
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		mu.Unlock()
+
+		cmdStr := strings.Join(append([]string{name}, args...), " ")
+		if strings.Contains(cmdStr, "up repo-101") {
+			return []byte("simulated wake error"), errors.New("simulated wake error")
+		}
+		if strings.Contains(cmdStr, "tmux has-session") && strings.Contains(cmdStr, "repo-102") {
+			return []byte("simulated tmux polling error"), errors.New("simulated tmux error")
+		}
+		return []byte("success"), nil
+	}
+
+	peers := []string{"repo-101", "repo-102", "repo-103"}
+	running := map[string]bool{
+		"repo-101": false, // wake fails
+		"repo-102": false, // tmux polling fails
+		"repo-103": false, // succeeds
+	}
+
+	notifyPeerContainers(context.Background(), "owner/repo", peers, running, 99)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	var repo103Woken, repo103Injected, repo103Stopped bool
+	var repo102Stopped bool
+	for _, cmd := range capturedCommands {
+		cmdStr := strings.Join(cmd, " ")
+		if strings.Contains(cmdStr, "up repo-103") {
+			repo103Woken = true
+		}
+		if strings.Contains(cmdStr, "tmux send-keys") && strings.Contains(cmdStr, "repo-103") {
+			repo103Injected = true
+		}
+		if strings.Contains(cmdStr, "devpod stop repo-103") {
+			repo103Stopped = true
+		}
+		if strings.Contains(cmdStr, "devpod stop repo-102") {
+			repo102Stopped = true
+		}
+	}
+
+	if !repo103Woken || !repo103Injected || !repo103Stopped {
+		t.Errorf("expected repo-103 to be woken, injected, and stopped despite earlier failures; got woken=%v, injected=%v, stopped=%v", repo103Woken, repo103Injected, repo103Stopped)
+	}
+	if !repo102Stopped {
+		t.Errorf("expected repo-102 to be stopped even when tmux polling fails, but it was not")
 	}
 }
 
