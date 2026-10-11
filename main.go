@@ -92,6 +92,77 @@ type DevpodWorkspace struct {
 	} `json:"source"`
 }
 
+type devpodWorkspace = DevpodWorkspace
+
+func findPeerIssueContainers(workspaces []DevpodWorkspace, targetID string, projectID string) []string {
+	var peers []string
+	prefix := projectID + "-"
+	for _, w := range workspaces {
+		if w.ID == targetID {
+			continue
+		}
+		if strings.HasPrefix(w.ID, prefix) {
+			rem := w.ID[len(prefix):]
+			if rem == "" {
+				continue
+			}
+			isNumeric := true
+			for _, r := range rem {
+				if r < '0' || r > '9' {
+					isNumeric = false
+					break
+				}
+			}
+			if isNumeric {
+				peers = append(peers, w.ID)
+			}
+		}
+	}
+	return peers
+}
+
+func notifyPeerContainers(ctx context.Context, repo string, peers []string, running map[string]bool, closedIssueNum int) {
+	prompt := fmt.Sprintf("Issue #%d has been closed", closedIssueNum)
+	for _, peerID := range peers {
+		if ctx.Err() != nil {
+			logWithPrefix(repo, "Context cancelled while notifying peer containers")
+			return
+		}
+		if !running[peerID] {
+			continue
+		}
+
+		sessionName := peerID
+		out, err := runCommandWithLog(repo, devpodExe, "ssh", peerID, "--command", fmt.Sprintf("tmux has-session -t %s", peerID))
+		if err != nil {
+			lastIdx := strings.LastIndex(peerID, "-")
+			if lastIdx != -1 {
+				if _, errNum := strconv.Atoi(peerID[lastIdx+1:]); errNum == nil {
+					baseID := peerID[:lastIdx]
+					fallbackOut, fallbackErr := runCommandWithLog(repo, devpodExe, "ssh", peerID, "--command", fmt.Sprintf("tmux has-session -t %s", baseID))
+					if fallbackErr == nil {
+						err = nil
+						sessionName = baseID
+						out = fallbackOut
+					}
+				}
+			}
+		}
+
+		if err != nil {
+			logWithPrefix(repo, "Warning: failed to find tmux session for active peer %s: %v (output: %s)", peerID, err, strings.TrimSpace(string(out)))
+			continue
+		}
+
+		injectOut, injectErr := runCommandWithLog(repo, devpodExe, "ssh", peerID, "--command", fmt.Sprintf("tmux send-keys -t %s %s C-m", sessionName, shellQuote(prompt)))
+		if injectErr != nil {
+			logWithPrefix(repo, "Warning: failed to inject close notification into peer %s: %v (output: %s)", peerID, injectErr, strings.TrimSpace(string(injectOut)))
+			continue
+		}
+		logWithPrefix(repo, "Successfully notified peer container %s of closed issue #%d", peerID, closedIssueNum)
+	}
+}
+
 func listDevpodWorkspaces() ([]DevpodWorkspace, error) {
 	out, err := runDevpodCommand(devpodExe, "list", "--output", "json")
 	if err != nil {
@@ -988,6 +1059,20 @@ func run(ctx context.Context, cfg *config) error {
 
 							if shouldCleanup {
 								logWithPrefix(repo, "Cleaning up finished/unlabeled issue container: %s", id)
+								peers := findPeerIssueContainers(workspaces, id, projectID)
+								if len(peers) > 0 {
+									runningCopy := make(map[string]bool)
+									stateMu.Lock()
+									for k, v := range running {
+										runningCopy[k] = v
+									}
+									stateMu.Unlock()
+									wg.Add(1)
+									go func(p []string, issueNum int) {
+										defer wg.Done()
+										notifyPeerContainers(ctx, repo, p, runningCopy, issueNum)
+									}(peers, issueNumber)
+								}
 								errStop := stopContainer(repo, id)
 								if errStop != nil {
 									logWithPrefix(repo, "Warning: failed to stop container %s during cleanup: %v", id, errStop)
