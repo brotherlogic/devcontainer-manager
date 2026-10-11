@@ -121,6 +121,69 @@ func findPeerIssueContainers(workspaces []DevpodWorkspace, targetID string, proj
 	return peers
 }
 
+func findPeerTmuxSession(repo, peerID string) (string, error) {
+	sessionName := peerID
+	out, err := runCommandWithLog(repo, devpodExe, "ssh", peerID, "--command", fmt.Sprintf("tmux has-session -t %s", peerID))
+	if err != nil {
+		lastIdx := strings.LastIndex(peerID, "-")
+		if lastIdx != -1 {
+			if _, errNum := strconv.Atoi(peerID[lastIdx+1:]); errNum == nil {
+				baseID := peerID[:lastIdx]
+				_, fallbackErr := runCommandWithLog(repo, devpodExe, "ssh", peerID, "--command", fmt.Sprintf("tmux has-session -t %s", baseID))
+				if fallbackErr == nil {
+					return baseID, nil
+				}
+			}
+		}
+		return "", fmt.Errorf("tmux session check failed: %w (output: %s)", err, strings.TrimSpace(string(out)))
+	}
+	return sessionName, nil
+}
+
+func pollPeerTmuxSession(ctx context.Context, repo, peerID string) (string, error) {
+	ticker := time.NewTicker(pollingInterval)
+	defer ticker.Stop()
+
+	timeout := time.After(pollingTimeout)
+
+	if sessionName, err := findPeerTmuxSession(repo, peerID); err == nil {
+		return sessionName, nil
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-timeout:
+			return "", fmt.Errorf("timeout waiting for tmux session on peer %s", peerID)
+		case <-ticker.C:
+			if sessionName, err := findPeerTmuxSession(repo, peerID); err == nil {
+				return sessionName, nil
+			}
+		}
+	}
+}
+
+func ensureContainerAsleepLabel(ctx context.Context, repo, peerID string) {
+	owner, repoName, err := parseOwnerRepo(repo)
+	if err != nil {
+		return
+	}
+	lastIdx := strings.LastIndex(peerID, "-")
+	if lastIdx == -1 {
+		return
+	}
+	peerIssueNum, err := strconv.Atoi(peerID[lastIdx+1:])
+	if err != nil || peerIssueNum <= 0 {
+		return
+	}
+	client, err := gitHubClientProvider()
+	if err != nil || client == nil {
+		return
+	}
+	adjustIssueLabels(ctx, client, owner, repoName, peerIssueNum, "container-asleep", []string{"container-creating", "container-ready", "container-failed"}, "retaining container-asleep label after peer notification")
+}
+
 func notifyPeerContainers(ctx context.Context, repo string, peers []string, running map[string]bool, closedIssueNum int) {
 	prompt := fmt.Sprintf("Issue #%d has been closed", closedIssueNum)
 	for _, peerID := range peers {
@@ -128,29 +191,37 @@ func notifyPeerContainers(ctx context.Context, repo string, peers []string, runn
 			logWithPrefix(repo, "Context cancelled while notifying peer containers")
 			return
 		}
+
 		if !running[peerID] {
+			wakeOut, wakeErr := runCommandWithLog(repo, devpodExe, "up", peerID, "--ide", "none")
+			if wakeErr != nil {
+				logWithPrefix(repo, "Warning: failed to wake asleep peer container %s: %v (output: %s)", peerID, wakeErr, strings.TrimSpace(string(wakeOut)))
+				ensureContainerAsleepLabel(ctx, repo, peerID)
+				continue
+			}
+
+			sessionName, pollErr := pollPeerTmuxSession(ctx, repo, peerID)
+			if pollErr != nil {
+				logWithPrefix(repo, "Warning: failed to find tmux session for asleep peer %s within timeout: %v", peerID, pollErr)
+			} else {
+				injectOut, injectErr := runCommandWithLog(repo, devpodExe, "ssh", peerID, "--command", fmt.Sprintf("tmux send-keys -t %s %s C-m", sessionName, shellQuote(prompt)))
+				if injectErr != nil {
+					logWithPrefix(repo, "Warning: failed to inject close notification into asleep peer %s: %v (output: %s)", peerID, injectErr, strings.TrimSpace(string(injectOut)))
+				} else {
+					logWithPrefix(repo, "Successfully notified asleep peer container %s of closed issue #%d", peerID, closedIssueNum)
+				}
+			}
+
+			if stopErr := stopContainer(repo, peerID); stopErr != nil {
+				logWithPrefix(repo, "Warning: failed to re-stop asleep peer container %s: %v", peerID, stopErr)
+			}
+			ensureContainerAsleepLabel(ctx, repo, peerID)
 			continue
 		}
 
-		sessionName := peerID
-		out, err := runCommandWithLog(repo, devpodExe, "ssh", peerID, "--command", fmt.Sprintf("tmux has-session -t %s", peerID))
+		sessionName, err := findPeerTmuxSession(repo, peerID)
 		if err != nil {
-			lastIdx := strings.LastIndex(peerID, "-")
-			if lastIdx != -1 {
-				if _, errNum := strconv.Atoi(peerID[lastIdx+1:]); errNum == nil {
-					baseID := peerID[:lastIdx]
-					fallbackOut, fallbackErr := runCommandWithLog(repo, devpodExe, "ssh", peerID, "--command", fmt.Sprintf("tmux has-session -t %s", baseID))
-					if fallbackErr == nil {
-						err = nil
-						sessionName = baseID
-						out = fallbackOut
-					}
-				}
-			}
-		}
-
-		if err != nil {
-			logWithPrefix(repo, "Warning: failed to find tmux session for active peer %s: %v (output: %s)", peerID, err, strings.TrimSpace(string(out)))
+			logWithPrefix(repo, "Warning: failed to find tmux session for active peer %s: %v", peerID, err)
 			continue
 		}
 
