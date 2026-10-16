@@ -192,8 +192,8 @@ func ensureContainerAsleepLabel(ctx context.Context, repo, peerID string) {
 	adjustIssueLabels(ctx, client, owner, repoName, peerIssueNum, "container-asleep", []string{"container-creating", "container-ready", "container-failed"}, "retaining container-asleep label after peer notification")
 }
 
-func notifyPeerContainers(ctx context.Context, repo string, peers []string, running map[string]bool, closedIssueNum int) {
-	prompt := fmt.Sprintf("Issue #%d has been updated, please refresh", closedIssueNum)
+func notifyPeerContainers(ctx context.Context, repo string, peers []string, running map[string]bool, issueNum int) {
+	prompt := fmt.Sprintf("Issue #%d has been updated, please refresh", issueNum)
 	for _, peerID := range peers {
 		if ctx.Err() != nil {
 			logWithPrefix(repo, "Context cancelled while notifying peer containers")
@@ -214,9 +214,9 @@ func notifyPeerContainers(ctx context.Context, repo string, peers []string, runn
 			} else {
 				injectOut, injectErr := runCommandWithLog(repo, devpodExe, "ssh", peerID, "--command", fmt.Sprintf("tmux send-keys -t %s %s C-m", sessionName, shellQuote(prompt)))
 				if injectErr != nil {
-					logWithPrefix(repo, "Warning: failed to inject close notification into asleep peer %s: %v (output: %s)", peerID, injectErr, strings.TrimSpace(string(injectOut)))
+					logWithPrefix(repo, "Warning: failed to inject update notification into asleep peer %s: %v (output: %s)", peerID, injectErr, strings.TrimSpace(string(injectOut)))
 				} else {
-					logWithPrefix(repo, "Successfully notified asleep peer container %s of closed issue #%d", peerID, closedIssueNum)
+					logWithPrefix(repo, "Successfully notified asleep peer container %s of updated issue #%d", peerID, issueNum)
 				}
 			}
 
@@ -235,10 +235,10 @@ func notifyPeerContainers(ctx context.Context, repo string, peers []string, runn
 
 		injectOut, injectErr := runCommandWithLog(repo, devpodExe, "ssh", peerID, "--command", fmt.Sprintf("tmux send-keys -t %s %s C-m", sessionName, shellQuote(prompt)))
 		if injectErr != nil {
-			logWithPrefix(repo, "Warning: failed to inject close notification into peer %s: %v (output: %s)", peerID, injectErr, strings.TrimSpace(string(injectOut)))
+			logWithPrefix(repo, "Warning: failed to inject update notification into peer %s: %v (output: %s)", peerID, injectErr, strings.TrimSpace(string(injectOut)))
 			continue
 		}
-		logWithPrefix(repo, "Successfully notified peer container %s of closed issue #%d", peerID, closedIssueNum)
+		logWithPrefix(repo, "Successfully notified peer container %s of updated issue #%d", peerID, issueNum)
 	}
 }
 
