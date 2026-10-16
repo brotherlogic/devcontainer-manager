@@ -4907,7 +4907,7 @@ func TestNotifyPeerContainers_ActivePeer(t *testing.T) {
 	var devpodStopCalled bool
 	for _, cmd := range capturedCommands {
 		cmdStr := strings.Join(cmd, " ")
-		if strings.Contains(cmdStr, "tmux send-keys") && strings.Contains(cmdStr, "repo-101") && strings.Contains(cmdStr, "Issue #99 has been closed") {
+		if strings.Contains(cmdStr, "tmux send-keys") && strings.Contains(cmdStr, "repo-101") && strings.Contains(cmdStr, "Issue #99 has been updated, please refresh") {
 			sentKeysTo101 = true
 		}
 		if strings.Contains(cmdStr, "devpod up") {
@@ -4919,7 +4919,7 @@ func TestNotifyPeerContainers_ActivePeer(t *testing.T) {
 	}
 
 	if !sentKeysTo101 {
-		t.Errorf("expected tmux send-keys to be called for active peer repo-101 with close prompt, but was not")
+		t.Errorf("expected tmux send-keys to be called for active peer repo-101 with update prompt, but was not")
 	}
 	if devpodUpCalled {
 		t.Errorf("expected devpod up NOT to be called for active peer repo-101, but it was")
@@ -4990,7 +4990,7 @@ func TestNotifyPeerContainers_AsleepPeer(t *testing.T) {
 		if strings.Contains(cmdStr, "devpod up repo-102 --ide none") {
 			wakeIdx = idx
 		}
-		if strings.Contains(cmdStr, "tmux send-keys") && strings.Contains(cmdStr, "Issue #99 has been closed") {
+		if strings.Contains(cmdStr, "tmux send-keys") && strings.Contains(cmdStr, "Issue #99 has been updated, please refresh") {
 			promptIdx = idx
 		}
 		if strings.Contains(cmdStr, "devpod stop repo-102") {
@@ -5002,7 +5002,7 @@ func TestNotifyPeerContainers_AsleepPeer(t *testing.T) {
 		t.Errorf("expected wake command (devpod up repo-102 --ide none), but was not called")
 	}
 	if promptIdx == -1 {
-		t.Errorf("expected prompt injection (tmux send-keys with 'Issue #99 has been closed'), but was not called")
+		t.Errorf("expected prompt injection (tmux send-keys with 'Issue #99 has been updated, please refresh'), but was not called")
 	}
 	if stopIdx == -1 {
 		t.Errorf("expected re-stop command (devpod stop repo-102), but was not called")
@@ -5193,7 +5193,7 @@ func TestCleanup_DispatchesPeerNotifications(t *testing.T) {
 		if cmd[0] == devpodExe && len(cmd) > 2 && cmd[1] == "delete" && cmd[2] == "test-repo-4" {
 			deleteCalledFor4 = true
 		}
-		if strings.Contains(cmdStr, "tmux send-keys") && strings.Contains(cmdStr, "test-repo-5") && strings.Contains(cmdStr, "Issue #4 has been closed") {
+		if strings.Contains(cmdStr, "tmux send-keys") && strings.Contains(cmdStr, "test-repo-5") && strings.Contains(cmdStr, "Issue #4 has been updated, please refresh") {
 			peerNotificationSentFor5 = true
 		}
 	}
