@@ -193,7 +193,7 @@ func ensureContainerAsleepLabel(ctx context.Context, repo, peerID string) {
 }
 
 func notifyPeerContainers(ctx context.Context, repo string, peers []string, running map[string]bool, closedIssueNum int) {
-	prompt := fmt.Sprintf("Issue #%d has been closed", closedIssueNum)
+	prompt := fmt.Sprintf("Issue #%d has been updated, please refresh", closedIssueNum)
 	for _, peerID := range peers {
 		if ctx.Err() != nil {
 			logWithPrefix(repo, "Context cancelled while notifying peer containers")
