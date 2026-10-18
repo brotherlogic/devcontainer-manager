@@ -89,6 +89,7 @@ type DevpodWorkspace struct {
 	UID    string `json:"uid"`
 	Source struct {
 		GitRepository string `json:"gitRepository"`
+		LocalFolder   string `json:"localFolder"`
 	} `json:"source"`
 }
 
@@ -1186,6 +1187,9 @@ func run(ctx context.Context, cfg *config) error {
 			cName := w.ID
 			cSource := w.Source.GitRepository
 			if cName != "" {
+				if strings.HasSuffix(cName, "-daemon") || w.Source.LocalFolder != "" {
+					continue
+				}
 				// Check (b): Uses HTTP source
 				u, errURL := url.Parse(cSource)
 				isHTTPSource := errURL == nil && (u.Scheme == "http" || u.Scheme == "https")

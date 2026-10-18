@@ -5206,6 +5206,95 @@ func TestCleanup_DispatchesPeerNotifications(t *testing.T) {
 	}
 }
 
+func TestRun_ExtraCleanupPreservesDaemonAndLocalFolderWorkspaces(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
 
+	if _, err := tmpFile.WriteString("test-owner/test-repo\n"); err != nil {
+		t.Fatalf("failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
 
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return nil, fmt.Errorf("no gh client")
+	}
 
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	var mu sync.Mutex
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		mu.Lock()
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		mu.Unlock()
+
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			return []byte(`[
+				{"id": "test-repo", "source": {"gitRepository": "git@github.com:test-owner/test-repo"}},
+				{"id": "hometheatre-daemon", "source": {"localFolder": "/home/user/hometheatre"}},
+				{"id": "other-daemon", "source": {"gitRepository": "git@github.com:test-owner/other"}},
+				{"id": "local-workspace", "source": {"localFolder": "/opt/local-workspace"}},
+				{"id": "unlisted-repo", "source": {"gitRepository": "git@github.com:test-owner/unlisted-repo"}}
+			]`), nil
+		}
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			return []byte(
+				"test-repo|sh.loft.devpod.workspace.id=test-repo\n" +
+					"hometheatre-daemon|sh.loft.devpod.workspace.id=hometheatre-daemon\n" +
+					"other-daemon|sh.loft.devpod.workspace.id=other-daemon\n" +
+					"local-workspace|sh.loft.devpod.workspace.id=local-workspace\n" +
+					"unlisted-repo|sh.loft.devpod.workspace.id=unlisted-repo\n",
+			), nil
+		}
+		return []byte("success"), nil
+	}
+
+	cfg := &config{
+		once:               true,
+		containerList:      tmpFile.Name(),
+		maxIssueContainers: 5,
+	}
+
+	err = run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	stopped := make(map[string]bool)
+	deleted := make(map[string]bool)
+	for _, cmd := range capturedCommands {
+		if len(cmd) >= 3 && cmd[0] == devpodExe {
+			switch cmd[1] {
+			case "stop":
+				stopped[cmd[2]] = true
+			case "delete":
+				deleted[cmd[2]] = true
+			}
+		}
+	}
+
+	for _, preservedID := range []string{"test-repo", "hometheatre-daemon", "other-daemon", "local-workspace"} {
+		if stopped[preservedID] {
+			t.Errorf("expected workspace %s NOT to be stopped during extra cleanup, but it was", preservedID)
+		}
+		if deleted[preservedID] {
+			t.Errorf("expected workspace %s NOT to be deleted during extra cleanup, but it was", preservedID)
+		}
+	}
+
+	if !stopped["unlisted-repo"] {
+		t.Errorf("expected unlisted-repo to be stopped during extra cleanup, but it was not")
+	}
+	if !deleted["unlisted-repo"] {
+		t.Errorf("expected unlisted-repo to be deleted during extra cleanup, but it was not")
+	}
+}
