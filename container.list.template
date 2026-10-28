@@ -28,6 +28,7 @@ brotherlogic/printqueue
 brotherlogic/prod
 brotherlogic/recordalerting
 brotherlogic/recordbudget
+brotherlogic/recordcleaner
 brotherlogic/recordgetter
 brotherlogic/recordcollection
 brotherlogic/recorder
