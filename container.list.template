@@ -1,5 +1,6 @@
 # List of devcontainers to be managed and synced
 brotherlogic/auth
+brotherlogic/bandcamplib
 brotherlogic/bartwarn
 brotherlogic/beerkellar
 brotherlogic/brarm
