@@ -5298,3 +5298,429 @@ func TestRun_ExtraCleanupPreservesDaemonAndLocalFolderWorkspaces(t *testing.T) {
 		t.Errorf("expected unlisted-repo to be deleted during extra cleanup, but it was not")
 	}
 }
+
+func TestCleanup_ExtractsTokenUsageBeforeStoppingContainer(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("test-owner/test-repo\n"); err != nil {
+		t.Fatalf("failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+
+	var commentPosted bool
+	var commentBody string
+	var commentMu sync.Mutex
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/4", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"number": 4, "state": "closed", "updated_at": "2026-05-31T12:00:00Z", "labels": []}`)
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/4/comments", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			var comment struct {
+				Body string `json:"body"`
+			}
+			json.NewDecoder(r.Body).Decode(&comment)
+			commentMu.Lock()
+			commentPosted = true
+			commentBody = comment.Body
+			commentMu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"id": 999}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `[]`)
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/issues", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `[]`)
+	})
+
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	var deleted4 bool
+	var mu sync.Mutex
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		mu.Lock()
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		if name == devpodExe && len(args) >= 2 && args[0] == "delete" && args[1] == "test-repo-4" {
+			deleted4 = true
+		}
+		isDeleted4 := deleted4
+		mu.Unlock()
+
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			if isDeleted4 {
+				return []byte(`[{"id": "test-repo"}]`), nil
+			}
+			return []byte(`[{"id": "test-repo"}, {"id": "test-repo-4"}]`), nil
+		}
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			return []byte("test-repo|sh.loft.devpod.workspace.id=test-repo\ntest-repo-4|sh.loft.devpod.workspace.id=test-repo-4\n"), nil
+		}
+		if name == devpodExe && len(args) >= 4 && args[0] == "ssh" && args[1] == "test-repo-4" && strings.Contains(args[3], "/tmp/token_usage.json") {
+			return []byte(`{"total_tokens": 4200}`), nil
+		}
+		return []byte("success"), nil
+	}
+
+	containerID := "test-repo-4"
+	globalCache.Update(containerID, &proto.DevcontainerConfig{
+		Id: containerID,
+		Request: &proto.UpRequest{
+			Repo: "test-owner/test-repo",
+			Identifier: &proto.Identifier{
+				Id: &proto.Identifier_IssueNumber{IssueNumber: 4},
+			},
+		},
+	})
+	defer globalCache.Delete(containerID)
+
+	cfg := &config{
+		once:               true,
+		containerList:      tmpFile.Name(),
+		maxIssueContainers: 5,
+	}
+
+	if err := run(context.Background(), cfg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	var sshCount int
+	sshIdx, stopIdx, deleteIdx := -1, -1, -1
+	for idx, cmd := range capturedCommands {
+		if cmd[0] != devpodExe || len(cmd) < 3 {
+			continue
+		}
+		if cmd[1] == "ssh" && cmd[2] == containerID && len(cmd) >= 5 && strings.Contains(cmd[4], "/tmp/token_usage.json") {
+			sshCount++
+			if sshIdx == -1 {
+				sshIdx = idx
+			}
+		}
+		if cmd[1] == "stop" && cmd[2] == containerID && stopIdx == -1 {
+			stopIdx = idx
+		}
+		if cmd[1] == "delete" && cmd[2] == containerID && deleteIdx == -1 {
+			deleteIdx = idx
+		}
+	}
+
+	if sshCount != 1 {
+		t.Fatalf("expected exactly 1 token extraction ssh command for %s, got %d", containerID, sshCount)
+	}
+	if sshIdx == -1 || stopIdx == -1 || deleteIdx == -1 {
+		t.Fatalf("expected ssh, stop, and delete commands for %s, got sshIdx=%d stopIdx=%d deleteIdx=%d", containerID, sshIdx, stopIdx, deleteIdx)
+	}
+	if !(sshIdx < stopIdx && stopIdx < deleteIdx) {
+		t.Errorf("expected strict order ssh < stop < delete, got sshIdx=%d stopIdx=%d deleteIdx=%d", sshIdx, stopIdx, deleteIdx)
+	}
+
+	commentMu.Lock()
+	defer commentMu.Unlock()
+	if !commentPosted {
+		t.Errorf("expected token usage comment to be posted to issue #4")
+	}
+	if !strings.Contains(commentBody, "4200") || !strings.Contains(commentBody, "EXTRACTION_SUCCESS") {
+		t.Errorf("expected comment body to contain 4200 and EXTRACTION_SUCCESS, got %q", commentBody)
+	}
+
+	if _, exists := globalCache.Get(containerID); exists {
+		t.Errorf("expected %s to be deleted from globalCache", containerID)
+	}
+}
+
+func TestExtraCleanup_ExtractsTokenUsageBeforeStoppingContainer(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("test-owner/test-repo\n"); err != nil {
+		t.Fatalf("failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return nil, fmt.Errorf("no gh client")
+	}
+
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	var mu sync.Mutex
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		mu.Lock()
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		mu.Unlock()
+
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			return []byte(`[
+				{"id": "test-repo", "source": {"gitRepository": "git@github.com:test-owner/test-repo"}},
+				{"id": "unlisted-repo", "source": {"gitRepository": "git@github.com:test-owner/unlisted-repo"}}
+			]`), nil
+		}
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			return []byte(
+				"test-repo|sh.loft.devpod.workspace.id=test-repo\n" +
+					"unlisted-repo|sh.loft.devpod.workspace.id=unlisted-repo\n",
+			), nil
+		}
+		if name == devpodExe && len(args) >= 4 && args[0] == "ssh" && args[1] == "unlisted-repo" && strings.Contains(args[3], "/tmp/token_usage.json") {
+			return []byte(`{"total_tokens": 100}`), nil
+		}
+		return []byte("success"), nil
+	}
+
+	cfg := &config{
+		once:               true,
+		containerList:      tmpFile.Name(),
+		maxIssueContainers: 5,
+	}
+
+	if err := run(context.Background(), cfg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	var sshCount int
+	sshIdx, stopIdx, deleteIdx := -1, -1, -1
+	for idx, cmd := range capturedCommands {
+		if cmd[0] != devpodExe || len(cmd) < 3 {
+			continue
+		}
+		if cmd[1] == "ssh" && cmd[2] == "unlisted-repo" && len(cmd) >= 5 && strings.Contains(cmd[4], "/tmp/token_usage.json") {
+			sshCount++
+			if sshIdx == -1 {
+				sshIdx = idx
+			}
+		}
+		if cmd[1] == "stop" && cmd[2] == "unlisted-repo" && stopIdx == -1 {
+			stopIdx = idx
+		}
+		if cmd[1] == "delete" && cmd[2] == "unlisted-repo" && deleteIdx == -1 {
+			deleteIdx = idx
+		}
+	}
+
+	if sshCount != 1 {
+		t.Fatalf("expected exactly 1 token extraction ssh command for unlisted-repo, got %d", sshCount)
+	}
+	if sshIdx == -1 || stopIdx == -1 || deleteIdx == -1 {
+		t.Fatalf("expected ssh, stop, and delete commands for unlisted-repo, got sshIdx=%d stopIdx=%d deleteIdx=%d", sshIdx, stopIdx, deleteIdx)
+	}
+	if !(sshIdx < stopIdx && stopIdx < deleteIdx) {
+		t.Errorf("expected strict order ssh < stop < delete, got sshIdx=%d stopIdx=%d deleteIdx=%d", sshIdx, stopIdx, deleteIdx)
+	}
+}
+
+func TestNotifyPeerContainers_ActivePeer_RetriesTransientErrors(t *testing.T) {
+	restoreRetryDefaults := func() func() {
+		origMaxAttempts := peerNotifyMaxAttempts
+		origInitialBackoff := peerNotifyInitialBackoff
+		origMaxBackoff := peerNotifyMaxBackoff
+		return func() {
+			peerNotifyMaxAttempts = origMaxAttempts
+			peerNotifyInitialBackoff = origInitialBackoff
+			peerNotifyMaxBackoff = origMaxBackoff
+		}
+	}
+
+	t.Run("retries transient findPeerTmuxSession failure", func(t *testing.T) {
+		defer restoreRetryDefaults()()
+		peerNotifyMaxAttempts = 4
+		peerNotifyInitialBackoff = 1 * time.Millisecond
+		peerNotifyMaxBackoff = 5 * time.Millisecond
+
+		originalCommandRunner := commandRunner
+		defer func() { commandRunner = originalCommandRunner }()
+
+		var hasSessionCalls int
+		var sendKeysCalls int
+		var mu sync.Mutex
+		commandRunner = func(name string, args ...string) ([]byte, error) {
+			cmdStr := strings.Join(append([]string{name}, args...), " ")
+			mu.Lock()
+			defer mu.Unlock()
+			if strings.Contains(cmdStr, "tmux has-session") && strings.Contains(cmdStr, "repo-101") {
+				hasSessionCalls++
+				// findPeerTmuxSession checks repo-101 and fallback repo per attempt (2 calls per attempt)
+				if hasSessionCalls <= 4 {
+					return []byte("transient ssh error"), errors.New("transient ssh error")
+				}
+				return []byte("ok"), nil
+			}
+			if strings.Contains(cmdStr, "tmux send-keys") && strings.Contains(cmdStr, "repo-101") && strings.Contains(cmdStr, "Issue #99 has been updated, please refresh") {
+				sendKeysCalls++
+				return []byte("ok"), nil
+			}
+			return []byte("ok"), nil
+		}
+
+		notifyPeerContainers(context.Background(), "owner/repo", []string{"repo-101"}, map[string]bool{"repo-101": true}, 99)
+
+		mu.Lock()
+		defer mu.Unlock()
+		if sendKeysCalls != 1 {
+			t.Errorf("expected tmux send-keys to succeed after transient findPeerTmuxSession retries, got sendKeysCalls=%d (hasSessionCalls=%d)", sendKeysCalls, hasSessionCalls)
+		}
+	})
+
+	t.Run("retries transient tmux send-keys failure", func(t *testing.T) {
+		defer restoreRetryDefaults()()
+		peerNotifyMaxAttempts = 4
+		peerNotifyInitialBackoff = 1 * time.Millisecond
+		peerNotifyMaxBackoff = 5 * time.Millisecond
+
+		originalCommandRunner := commandRunner
+		defer func() { commandRunner = originalCommandRunner }()
+
+		var sendKeysCalls int
+		var mu sync.Mutex
+		commandRunner = func(name string, args ...string) ([]byte, error) {
+			cmdStr := strings.Join(append([]string{name}, args...), " ")
+			mu.Lock()
+			defer mu.Unlock()
+			if strings.Contains(cmdStr, "tmux send-keys") && strings.Contains(cmdStr, "repo-101") {
+				sendKeysCalls++
+				if sendKeysCalls <= 2 {
+					return []byte("transient send-keys ssh error"), errors.New("transient send-keys ssh error")
+				}
+				return []byte("ok"), nil
+			}
+			return []byte("ok"), nil
+		}
+
+		notifyPeerContainers(context.Background(), "owner/repo", []string{"repo-101"}, map[string]bool{"repo-101": true}, 99)
+
+		mu.Lock()
+		defer mu.Unlock()
+		if sendKeysCalls != 3 {
+			t.Errorf("expected tmux send-keys to be called 3 times before succeeding, got %d", sendKeysCalls)
+		}
+	})
+
+	t.Run("continues to next active peer after exhausting retries", func(t *testing.T) {
+		defer restoreRetryDefaults()()
+		peerNotifyMaxAttempts = 4
+		peerNotifyInitialBackoff = 1 * time.Millisecond
+		peerNotifyMaxBackoff = 5 * time.Millisecond
+
+		originalCommandRunner := commandRunner
+		defer func() { commandRunner = originalCommandRunner }()
+
+		var repo101Attempts int
+		var repo102Sent bool
+		var mu sync.Mutex
+		commandRunner = func(name string, args ...string) ([]byte, error) {
+			cmdStr := strings.Join(append([]string{name}, args...), " ")
+			mu.Lock()
+			defer mu.Unlock()
+			if strings.Contains(cmdStr, "repo-101") && strings.Contains(cmdStr, "tmux has-session -t 'repo-101'") {
+				repo101Attempts++
+			}
+			if strings.Contains(cmdStr, "repo-101") && strings.Contains(cmdStr, "tmux has-session") {
+				return []byte("persistent ssh error"), errors.New("persistent ssh error")
+			}
+			if strings.Contains(cmdStr, "repo-102") && strings.Contains(cmdStr, "tmux send-keys") && strings.Contains(cmdStr, "Issue #99 has been updated, please refresh") {
+				repo102Sent = true
+			}
+			return []byte("ok"), nil
+		}
+
+		peers := []string{"repo-101", "repo-102"}
+		running := map[string]bool{
+			"repo-101": true,
+			"repo-102": true,
+		}
+		notifyPeerContainers(context.Background(), "owner/repo", peers, running, 99)
+
+		mu.Lock()
+		defer mu.Unlock()
+		if repo101Attempts != peerNotifyMaxAttempts {
+			t.Errorf("expected repo-101 to be retried %d times, got %d", peerNotifyMaxAttempts, repo101Attempts)
+		}
+		if !repo102Sent {
+			t.Errorf("expected repo-102 to still be notified after repo-101 exhausted retries")
+		}
+	})
+
+	t.Run("respects context cancellation during backoff", func(t *testing.T) {
+		defer restoreRetryDefaults()()
+		peerNotifyMaxAttempts = 4
+		peerNotifyInitialBackoff = 5 * time.Second
+		peerNotifyMaxBackoff = 5 * time.Second
+
+		originalCommandRunner := commandRunner
+		defer func() { commandRunner = originalCommandRunner }()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		var repo102Called bool
+		var mu sync.Mutex
+		commandRunner = func(name string, args ...string) ([]byte, error) {
+			cmdStr := strings.Join(append([]string{name}, args...), " ")
+			if strings.Contains(cmdStr, "repo-101") {
+				cancel()
+				return []byte("ssh error"), errors.New("ssh error")
+			}
+			if strings.Contains(cmdStr, "repo-102") {
+				mu.Lock()
+				repo102Called = true
+				mu.Unlock()
+			}
+			return []byte("ok"), nil
+		}
+
+		start := time.Now()
+		notifyPeerContainers(ctx, "owner/repo", []string{"repo-101", "repo-102"}, map[string]bool{"repo-101": true, "repo-102": true}, 99)
+		elapsed := time.Since(start)
+
+		if elapsed >= 500*time.Millisecond {
+			t.Errorf("expected notifyPeerContainers to abort promptly on context cancellation, took %v", elapsed)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if repo102Called {
+			t.Errorf("expected repo-102 NOT to be notified after context cancellation")
+		}
+	})
+}
