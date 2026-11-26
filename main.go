@@ -158,10 +158,11 @@ func teardownContainer(
 		}
 	}
 
+	extractAndReportTokenUsage(repo, containerID)
 	if errStop := stopContainer(repo, containerID); errStop != nil {
 		logWithPrefix(repo, "Warning: failed to stop container %s during %s: %v", containerID, reason, errStop)
 	}
-	if errDelete := deleteContainer(repo, containerID); errDelete != nil {
+	if errDelete := deleteContainerOnly(repo, containerID); errDelete != nil {
 		logWithPrefix(repo, "Warning: failed to delete container %s during %s: %v", containerID, reason, errDelete)
 		return false
 	}
@@ -243,6 +244,57 @@ func ensureContainerAsleepLabel(ctx context.Context, repo, peerID string) {
 	adjustIssueLabels(ctx, client, owner, repoName, peerIssueNum, "container-asleep", []string{"container-creating", "container-ready", "container-failed"}, "retaining container-asleep label after peer notification")
 }
 
+// retryWithBackoff runs fn up to maxAttempts times with exponential backoff, aborting early if ctx is cancelled.
+func retryWithBackoff(ctx context.Context, maxAttempts int, initialBackoff, maxBackoff time.Duration, fn func(attempt int) error) error {
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	backoff := initialBackoff
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if ctx != nil && ctx.Err() != nil {
+			return ctx.Err()
+		}
+		lastErr = fn(attempt)
+		if lastErr == nil {
+			return nil
+		}
+		if attempt == maxAttempts {
+			break
+		}
+		if backoff > 0 {
+			timer := time.NewTimer(backoff)
+			if ctx != nil {
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return ctx.Err()
+				case <-timer.C:
+				}
+			} else {
+				<-timer.C
+			}
+			backoff *= 2
+			if maxBackoff > 0 && backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+	}
+	return lastErr
+}
+
+// sendPeerTmuxNotification injects prompt into the peer's tmux session, retrying transient SSH/tmux failures with backoff.
+func sendPeerTmuxNotification(ctx context.Context, repo, peerID, sessionName, prompt string) ([]byte, error) {
+	var lastOut []byte
+	cmd := fmt.Sprintf("tmux send-keys -t %s %s C-m", sessionName, shellQuote(prompt))
+	err := retryWithBackoff(ctx, peerNotifyMaxAttempts, peerNotifyInitialBackoff, peerNotifyMaxBackoff, func(_ int) error {
+		out, cmdErr := runCommandWithLog(repo, devpodExe, "ssh", peerID, "--command", cmd)
+		lastOut = out
+		return cmdErr
+	})
+	return lastOut, err
+}
+
 func notifyPeerContainers(ctx context.Context, repo string, peers []string, running map[string]bool, issueNum int) {
 	prompt := fmt.Sprintf("Issue #%d has been updated, please refresh", issueNum)
 	for _, peerID := range peers {
@@ -263,9 +315,9 @@ func notifyPeerContainers(ctx context.Context, repo string, peers []string, runn
 			if pollErr != nil {
 				logWithPrefix(repo, "Warning: failed to find tmux session for asleep peer %s within timeout: %v", peerID, pollErr)
 			} else {
-				injectOut, injectErr := runCommandWithLog(repo, devpodExe, "ssh", peerID, "--command", fmt.Sprintf("tmux send-keys -t %s %s C-m", sessionName, shellQuote(prompt)))
+				injectOut, injectErr := sendPeerTmuxNotification(ctx, repo, peerID, sessionName, prompt)
 				if injectErr != nil {
-					logWithPrefix(repo, "Warning: failed to inject update notification into asleep peer %s: %v (output: %s)", peerID, injectErr, strings.TrimSpace(string(injectOut)))
+					logWithPrefix(repo, "Warning: failed to inject update notification into asleep peer %s after %d attempts: %v (output: %s)", peerID, peerNotifyMaxAttempts, injectErr, strings.TrimSpace(string(injectOut)))
 				} else {
 					logWithPrefix(repo, "Successfully notified asleep peer container %s of updated issue #%d", peerID, issueNum)
 				}
@@ -278,15 +330,28 @@ func notifyPeerContainers(ctx context.Context, repo string, peers []string, runn
 			continue
 		}
 
-		sessionName, err := findPeerTmuxSession(repo, peerID)
+		var sessionName string
+		err := retryWithBackoff(ctx, peerNotifyMaxAttempts, peerNotifyInitialBackoff, peerNotifyMaxBackoff, func(_ int) error {
+			var findErr error
+			sessionName, findErr = findPeerTmuxSession(repo, peerID)
+			return findErr
+		})
 		if err != nil {
-			logWithPrefix(repo, "Warning: failed to find tmux session for active peer %s: %v", peerID, err)
+			if ctx.Err() != nil {
+				logWithPrefix(repo, "Context cancelled while finding tmux session for active peer %s", peerID)
+				return
+			}
+			logWithPrefix(repo, "Warning: failed to find tmux session for active peer %s after %d attempts: %v", peerID, peerNotifyMaxAttempts, err)
 			continue
 		}
 
-		injectOut, injectErr := runCommandWithLog(repo, devpodExe, "ssh", peerID, "--command", fmt.Sprintf("tmux send-keys -t %s %s C-m", sessionName, shellQuote(prompt)))
+		injectOut, injectErr := sendPeerTmuxNotification(ctx, repo, peerID, sessionName, prompt)
 		if injectErr != nil {
-			logWithPrefix(repo, "Warning: failed to inject update notification into peer %s: %v (output: %s)", peerID, injectErr, strings.TrimSpace(string(injectOut)))
+			if ctx.Err() != nil {
+				logWithPrefix(repo, "Context cancelled while injecting update notification into peer %s", peerID)
+				return
+			}
+			logWithPrefix(repo, "Warning: failed to inject update notification into peer %s after %d attempts: %v (output: %s)", peerID, peerNotifyMaxAttempts, injectErr, strings.TrimSpace(string(injectOut)))
 			continue
 		}
 		logWithPrefix(repo, "Successfully notified peer container %s of updated issue #%d", peerID, issueNum)
@@ -476,9 +541,12 @@ var listOpenIssuesProvider = func(ctx context.Context, client *github.Client, ow
 }
 
 var (
-	pollingInterval = 5 * time.Second
-	pollingTimeout  = 5 * time.Minute
-	shaMutex        sync.RWMutex
+	pollingInterval          = 5 * time.Second
+	pollingTimeout           = 5 * time.Minute
+	peerNotifyMaxAttempts    = 5
+	peerNotifyInitialBackoff = 1 * time.Second
+	peerNotifyMaxBackoff     = 10 * time.Second
+	shaMutex                 sync.RWMutex
 )
 
 // We live dangerously
@@ -1516,7 +1584,8 @@ func postTokenUsageReport(ctx context.Context, client *github.Client, owner, rep
 	return err
 }
 
-func deleteContainer(repo, id string) error {
+// extractAndReportTokenUsage extracts token usage from a running container, updates cache, and reports it to GitHub or logs.
+func extractAndReportTokenUsage(repo, id string) {
 	ctx := context.Background()
 	extractCtx, extractCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer extractCancel()
@@ -1566,7 +1635,10 @@ func deleteContainer(repo, id string) error {
 		logWithPrefix(repo, "Token usage for non-issue container %s: Status=%s, TotalTokens=%d, Reason=%s",
 			id, usage.GetStatus(), usage.GetTotalTokens(), usage.GetFailureReason())
 	}
+}
 
+// deleteContainerOnly deletes a devcontainer workspace and removes it from globalCache without extracting token usage.
+func deleteContainerOnly(repo, id string) error {
 	deleteOut, err := runCommandWithLog(repo, devpodExe, "delete", id)
 	if err != nil {
 		return fmt.Errorf("%s delete failed: %w (output: %s)", devpodExe, err, string(deleteOut))
@@ -1575,6 +1647,11 @@ func deleteContainer(repo, id string) error {
 	globalCache.Delete(id)
 	logWithPrefix(repo, "Successfully deleted devcontainer %s", id)
 	return nil
+}
+
+func deleteContainer(repo, id string) error {
+	extractAndReportTokenUsage(repo, id)
+	return deleteContainerOnly(repo, id)
 }
 
 func sortReposByLastUpdated(repos []string) {
