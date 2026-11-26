@@ -5298,3 +5298,703 @@ func TestRun_ExtraCleanupPreservesDaemonAndLocalFolderWorkspaces(t *testing.T) {
 		t.Errorf("expected unlisted-repo to be deleted during extra cleanup, but it was not")
 	}
 }
+
+func TestFindPeerIssueContainersExcluding(t *testing.T) {
+	workspaces := []DevpodWorkspace{
+		{ID: "devcontainer-manager-100"},
+		{ID: "devcontainer-manager-101"},
+		{ID: "devcontainer-manager-102"},
+		{ID: "devcontainer-manager"},
+		{ID: "devcontainer-manager-notanumber"},
+		{ID: "other-repo-100"},
+		{ID: "devcontainer-manager-extra-200"},
+	}
+
+	peers := findPeerIssueContainersExcluding(
+		workspaces,
+		"devcontainer-manager-101",
+		"devcontainer-manager",
+		map[string]bool{"devcontainer-manager-102": true},
+	)
+
+	expected := []string{"devcontainer-manager-100"}
+	if len(peers) != len(expected) {
+		t.Fatalf("expected %d peers %v, got %d %v", len(expected), expected, len(peers), peers)
+	}
+	for i, peer := range peers {
+		if peer != expected[i] {
+			t.Errorf("expected peer %d to be %s, got %s", i, expected[i], peer)
+		}
+	}
+}
+
+func TestGetIssueWithRetry_AndAdjustIssueLabels(t *testing.T) {
+	t.Run("retries 429 and succeeds", func(t *testing.T) {
+		mux := http.NewServeMux()
+		server := httptest.NewServer(mux)
+		defer server.Close()
+
+		client := github.NewClient(nil)
+		u, _ := url.Parse(server.URL + "/")
+		client.BaseURL = u
+		client.UploadURL = u
+
+		var calls int32
+		mux.HandleFunc("/repos/owner/repo/issues/42", func(w http.ResponseWriter, r *http.Request) {
+			attempt := atomic.AddInt32(&calls, 1)
+			if attempt < 3 {
+				w.WriteHeader(http.StatusTooManyRequests)
+				fmt.Fprint(w, `{"message":"rate limit exceeded"}`)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"number": 42, "state": "open"}`)
+		})
+
+		issue, _, err := getIssueWithRetry(context.Background(), client, "owner", "repo", 42)
+		if err != nil {
+			t.Fatalf("expected getIssueWithRetry to succeed on attempt 3, got error: %v", err)
+		}
+		if issue == nil || issue.GetNumber() != 42 {
+			t.Fatalf("expected issue #42, got %+v", issue)
+		}
+		if got := atomic.LoadInt32(&calls); got != 3 {
+			t.Errorf("expected 3 attempts, got %d", got)
+		}
+	})
+
+	t.Run("does not retry 500", func(t *testing.T) {
+		mux := http.NewServeMux()
+		server := httptest.NewServer(mux)
+		defer server.Close()
+
+		client := github.NewClient(nil)
+		u, _ := url.Parse(server.URL + "/")
+		client.BaseURL = u
+		client.UploadURL = u
+
+		var calls int32
+		mux.HandleFunc("/repos/owner/repo/issues/43", func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&calls, 1)
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"message":"internal error"}`)
+		})
+
+		_, _, err := getIssueWithRetry(context.Background(), client, "owner", "repo", 43)
+		if err == nil {
+			t.Fatalf("expected error on 500, got nil")
+		}
+		if got := atomic.LoadInt32(&calls); got != 1 {
+			t.Errorf("expected exactly 1 request without retries, got %d", got)
+		}
+	})
+
+	t.Run("adjustIssueLabels retries issue fetch", func(t *testing.T) {
+		mux := http.NewServeMux()
+		server := httptest.NewServer(mux)
+		defer server.Close()
+
+		client := github.NewClient(nil)
+		u, _ := url.Parse(server.URL + "/")
+		client.BaseURL = u
+		client.UploadURL = u
+
+		var getCalls int32
+		var removedCreating bool
+		var addedReady bool
+		mux.HandleFunc("/repos/owner/repo/issues/44", func(w http.ResponseWriter, r *http.Request) {
+			attempt := atomic.AddInt32(&getCalls, 1)
+			if attempt == 1 {
+				w.WriteHeader(http.StatusTooManyRequests)
+				fmt.Fprint(w, `{"message":"rate limit exceeded"}`)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"number": 44, "state": "open", "labels": [{"name": "container-creating"}]}`)
+		})
+		mux.HandleFunc("/repos/owner/repo/issues/44/labels/container-creating", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodDelete {
+				removedCreating = true
+				w.WriteHeader(http.StatusOK)
+			}
+		})
+		mux.HandleFunc("/repos/owner/repo/issues/44/labels", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost {
+				var labels []string
+				json.NewDecoder(r.Body).Decode(&labels)
+				for _, l := range labels {
+					if l == "container-ready" {
+						addedReady = true
+					}
+				}
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprint(w, `[]`)
+			}
+		})
+
+		adjustIssueLabels(context.Background(), client, "owner", "repo", 44, "container-ready", []string{"container-creating"}, "test retry")
+
+		if got := atomic.LoadInt32(&getCalls); got != 2 {
+			t.Errorf("expected 2 GET attempts in adjustIssueLabels, got %d", got)
+		}
+		if !removedCreating {
+			t.Errorf("expected label container-creating to be removed")
+		}
+		if !addedReady {
+			t.Errorf("expected label container-ready to be added")
+		}
+	})
+}
+
+func TestRun_ReusesFetchedIssueStateAcrossHibernationAndCleanup(t *testing.T) {
+	oldGetConfigDir := getConfigDir
+	tempDir := t.TempDir()
+	getConfigDir = func() string { return tempDir }
+	defer func() { getConfigDir = oldGetConfigDir }()
+
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("test-owner/test-repo\n"); err != nil {
+		t.Fatalf("failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+
+	originalListProvider := listOpenIssuesProvider
+	defer func() { listOpenIssuesProvider = originalListProvider }()
+	listOpenIssuesProvider = func(ctx context.Context, cl *github.Client, owner, repo string) ([]*github.Issue, error) {
+		num := 5
+		title := "Open issue 5"
+		lbl := "seraphine-bug"
+		login := "brotherlogic-automation"
+		return []*github.Issue{
+			{
+				Number:    &num,
+				Title:     &title,
+				Labels:    []*github.Label{{Name: &lbl}},
+				Assignee:  &github.User{Login: &login},
+				Assignees: []*github.User{{Login: &login}},
+			},
+		}, nil
+	}
+
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			return []byte(`[{"id": "test-repo"}, {"id": "test-repo-4"}, {"id": "test-repo-5"}]`), nil
+		}
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			return []byte("test-repo|sh.loft.devpod.workspace.id=test-repo\ntest-repo-4|sh.loft.devpod.workspace.id=test-repo-4\ntest-repo-5|sh.loft.devpod.workspace.id=test-repo-5\n"), nil
+		}
+		return []byte("success"), nil
+	}
+
+	var issue4Calls, issue5Calls int32
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/4", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			atomic.AddInt32(&issue4Calls, 1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"number": 4, "state": "closed", "updated_at": "2026-05-31T12:00:00Z", "labels": []}`)
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/5", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			atomic.AddInt32(&issue5Calls, 1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"number": 5, "state": "open", "updated_at": "2026-05-31T12:00:00Z", "labels": [{"name": "seraphine-bug"}]}`)
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	cfg := &config{
+		once:               true,
+		containerList:      tmpFile.Name(),
+		maxIssueContainers: 5,
+	}
+
+	if err := run(context.Background(), cfg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := atomic.LoadInt32(&issue4Calls); got != 1 {
+		t.Errorf("expected GET issues/4 to be called exactly once, got %d", got)
+	}
+	if got := atomic.LoadInt32(&issue5Calls); got != 1 {
+		t.Errorf("expected GET issues/5 to be called exactly once, got %d", got)
+	}
+}
+
+func TestRun_CleanupExcludesOtherClosedSiblingsFromPeerNotifications(t *testing.T) {
+	oldGetConfigDir := getConfigDir
+	tempDir := t.TempDir()
+	getConfigDir = func() string { return tempDir }
+	defer func() { getConfigDir = oldGetConfigDir }()
+
+	tmpFile, err := os.CreateTemp("", "container_list_*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("test-owner/test-repo\n"); err != nil {
+		t.Fatalf("failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := github.NewClient(nil)
+	u, _ := url.Parse(server.URL + "/")
+	client.BaseURL = u
+	client.UploadURL = u
+
+	originalProvider := gitHubClientProvider
+	defer func() { gitHubClientProvider = originalProvider }()
+	gitHubClientProvider = func() (*github.Client, error) {
+		return client, nil
+	}
+
+	originalListProvider := listOpenIssuesProvider
+	defer func() { listOpenIssuesProvider = originalListProvider }()
+	listOpenIssuesProvider = func(ctx context.Context, cl *github.Client, owner, repo string) ([]*github.Issue, error) {
+		num := 10
+		title := "Open issue 10"
+		lbl := "seraphine-bug"
+		login := "brotherlogic-automation"
+		return []*github.Issue{
+			{
+				Number:    &num,
+				Title:     &title,
+				Labels:    []*github.Label{{Name: &lbl}},
+				Assignee:  &github.User{Login: &login},
+				Assignees: []*github.User{{Login: &login}},
+			},
+		}, nil
+	}
+
+	originalCommandRunner := commandRunner
+	defer func() { commandRunner = originalCommandRunner }()
+
+	var capturedCommands [][]string
+	var mu sync.Mutex
+	commandRunner = func(name string, args ...string) ([]byte, error) {
+		mu.Lock()
+		capturedCommands = append(capturedCommands, append([]string{name}, args...))
+		mu.Unlock()
+
+		if name == devpodExe && len(args) > 0 && args[0] == "list" {
+			return []byte(`[{"id": "test-repo"}, {"id": "test-repo-7"}, {"id": "test-repo-8"}, {"id": "test-repo-9"}, {"id": "test-repo-10"}]`), nil
+		}
+		if name == "docker" && len(args) > 0 && args[0] == "ps" {
+			return []byte(
+				"test-repo|sh.loft.devpod.workspace.id=test-repo\n" +
+					"test-repo-7|sh.loft.devpod.workspace.id=test-repo-7\n" +
+					"test-repo-8|sh.loft.devpod.workspace.id=test-repo-8\n" +
+					"test-repo-9|sh.loft.devpod.workspace.id=test-repo-9\n" +
+					"test-repo-10|sh.loft.devpod.workspace.id=test-repo-10\n",
+			), nil
+		}
+		return []byte("success"), nil
+	}
+
+	for _, closedNum := range []int{7, 8, 9} {
+		n := closedNum
+		mux.HandleFunc(fmt.Sprintf("/repos/test-owner/test-repo/issues/%d", n), func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"number": %d, "state": "closed", "updated_at": "2026-05-31T12:00:00Z", "labels": []}`, n)
+		})
+	}
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/10", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"number": 10, "state": "open", "updated_at": "2026-05-31T12:00:00Z", "labels": [{"name": "seraphine-bug"}]}`)
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/repos/test-owner/test-repo/contents/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	cfg := &config{
+		once:               true,
+		containerList:      tmpFile.Name(),
+		maxIssueContainers: 5,
+	}
+
+	if err := run(context.Background(), cfg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	stopped := make(map[string]bool)
+	deleted := make(map[string]bool)
+	notified10 := make(map[int]bool)
+	notifiedClosed := make(map[string]bool)
+
+	for _, cmd := range capturedCommands {
+		if len(cmd) >= 3 && cmd[0] == devpodExe {
+			switch cmd[1] {
+			case "stop":
+				stopped[cmd[2]] = true
+			case "delete":
+				deleted[cmd[2]] = true
+			case "ssh":
+				cmdStr := strings.Join(cmd, " ")
+				if strings.Contains(cmdStr, "tmux send-keys") {
+					target := cmd[2]
+					if target == "test-repo-7" || target == "test-repo-8" || target == "test-repo-9" {
+						notifiedClosed[target] = true
+					}
+					if target == "test-repo-10" {
+						for _, n := range []int{7, 8, 9} {
+							if strings.Contains(cmdStr, fmt.Sprintf("Issue #%d has been updated, please refresh", n)) {
+								notified10[n] = true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	for _, id := range []string{"test-repo-7", "test-repo-8", "test-repo-9"} {
+		if !stopped[id] {
+			t.Errorf("expected %s to be stopped", id)
+		}
+		if !deleted[id] {
+			t.Errorf("expected %s to be deleted", id)
+		}
+		if notifiedClosed[id] {
+			t.Errorf("expected closed sibling %s NOT to receive peer notification", id)
+		}
+	}
+	for _, n := range []int{7, 8, 9} {
+		if !notified10[n] {
+			t.Errorf("expected test-repo-10 to receive notification for issue #%d", n)
+		}
+	}
+}
+
+func TestRun_ExtraCleanupFallthroughStillNotifiesPeers(t *testing.T) {
+	t.Run("Issues.Get non-404 failure fallthrough", func(t *testing.T) {
+		oldGetConfigDir := getConfigDir
+		tempDir := t.TempDir()
+		getConfigDir = func() string { return tempDir }
+		defer func() { getConfigDir = oldGetConfigDir }()
+
+		tmpFile, err := os.CreateTemp("", "container_list_*")
+		if err != nil {
+			t.Fatalf("failed to create temp file: %v", err)
+		}
+		defer os.Remove(tmpFile.Name())
+
+		if _, err := tmpFile.WriteString("test-owner/test-repo\n"); err != nil {
+			t.Fatalf("failed to write to temp file: %v", err)
+		}
+		tmpFile.Close()
+
+		mux := http.NewServeMux()
+		server := httptest.NewServer(mux)
+		defer server.Close()
+
+		client := github.NewClient(nil)
+		u, _ := url.Parse(server.URL + "/")
+		client.BaseURL = u
+		client.UploadURL = u
+
+		originalProvider := gitHubClientProvider
+		defer func() { gitHubClientProvider = originalProvider }()
+		gitHubClientProvider = func() (*github.Client, error) {
+			return client, nil
+		}
+
+		originalListProvider := listOpenIssuesProvider
+		defer func() { listOpenIssuesProvider = originalListProvider }()
+		listOpenIssuesProvider = func(ctx context.Context, cl *github.Client, owner, repo string) ([]*github.Issue, error) {
+			num := 10
+			title := "Open issue 10"
+			lbl := "seraphine-bug"
+			login := "brotherlogic-automation"
+			return []*github.Issue{
+				{
+					Number:    &num,
+					Title:     &title,
+					Labels:    []*github.Label{{Name: &lbl}},
+					Assignee:  &github.User{Login: &login},
+					Assignees: []*github.User{{Login: &login}},
+				},
+			}, nil
+		}
+
+		originalCommandRunner := commandRunner
+		defer func() { commandRunner = originalCommandRunner }()
+
+		var capturedCommands [][]string
+		var mu sync.Mutex
+		commandRunner = func(name string, args ...string) ([]byte, error) {
+			mu.Lock()
+			capturedCommands = append(capturedCommands, append([]string{name}, args...))
+			mu.Unlock()
+
+			if name == devpodExe && len(args) > 0 && args[0] == "list" {
+				return []byte(`[{"id": "test-repo"}, {"id": "test-repo-7"}, {"id": "test-repo-10"}]`), nil
+			}
+			if name == "docker" && len(args) > 0 && args[0] == "ps" {
+				return []byte(
+					"test-repo|sh.loft.devpod.workspace.id=test-repo\n" +
+						"test-repo-7|sh.loft.devpod.workspace.id=test-repo-7\n" +
+						"test-repo-10|sh.loft.devpod.workspace.id=test-repo-10\n",
+				), nil
+			}
+			return []byte("success"), nil
+		}
+
+		mux.HandleFunc("/repos/test-owner/test-repo/issues/7", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"message":"server error"}`)
+		})
+		mux.HandleFunc("/repos/test-owner/test-repo/issues/10", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"number": 10, "state": "open", "updated_at": "2026-05-31T12:00:00Z", "labels": [{"name": "seraphine-bug"}]}`)
+		})
+		mux.HandleFunc("/repos/test-owner/test-repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		})
+		mux.HandleFunc("/repos/test-owner/test-repo/contents/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		})
+
+		cfg := &config{
+			once:               true,
+			containerList:      tmpFile.Name(),
+			maxIssueContainers: 5,
+		}
+
+		if err := run(context.Background(), cfg); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		var stopped7, deleted7, stopped10, deleted10, notified10 bool
+		for _, cmd := range capturedCommands {
+			if len(cmd) >= 3 && cmd[0] == devpodExe {
+				switch cmd[1] {
+				case "stop":
+					if cmd[2] == "test-repo-7" {
+						stopped7 = true
+					}
+					if cmd[2] == "test-repo-10" {
+						stopped10 = true
+					}
+				case "delete":
+					if cmd[2] == "test-repo-7" {
+						deleted7 = true
+					}
+					if cmd[2] == "test-repo-10" {
+						deleted10 = true
+					}
+				case "ssh":
+					cmdStr := strings.Join(cmd, " ")
+					if cmd[2] == "test-repo-10" && strings.Contains(cmdStr, "tmux send-keys") && strings.Contains(cmdStr, "Issue #7 has been updated, please refresh") {
+						notified10 = true
+					}
+				}
+			}
+		}
+
+		if !stopped7 || !deleted7 {
+			t.Errorf("expected test-repo-7 to be stopped and deleted via extra cleanup, got stopped=%v deleted=%v", stopped7, deleted7)
+		}
+		if stopped10 || deleted10 {
+			t.Errorf("expected test-repo-10 NOT to be stopped or deleted, got stopped=%v deleted=%v", stopped10, deleted10)
+		}
+		if !notified10 {
+			t.Errorf("expected test-repo-10 to be notified about issue #7 during extra cleanup")
+		}
+	})
+
+	t.Run("listDevpodWorkspaces failure at Hibernation/Cleanup fallthrough", func(t *testing.T) {
+		oldGetConfigDir := getConfigDir
+		tempDir := t.TempDir()
+		getConfigDir = func() string { return tempDir }
+		defer func() { getConfigDir = oldGetConfigDir }()
+
+		tmpFile, err := os.CreateTemp("", "container_list_*")
+		if err != nil {
+			t.Fatalf("failed to create temp file: %v", err)
+		}
+		defer os.Remove(tmpFile.Name())
+
+		if _, err := tmpFile.WriteString("test-owner/test-repo\n"); err != nil {
+			t.Fatalf("failed to write to temp file: %v", err)
+		}
+		tmpFile.Close()
+
+		mux := http.NewServeMux()
+		server := httptest.NewServer(mux)
+		defer server.Close()
+
+		client := github.NewClient(nil)
+		u, _ := url.Parse(server.URL + "/")
+		client.BaseURL = u
+		client.UploadURL = u
+
+		originalProvider := gitHubClientProvider
+		defer func() { gitHubClientProvider = originalProvider }()
+		gitHubClientProvider = func() (*github.Client, error) {
+			return client, nil
+		}
+
+		originalListProvider := listOpenIssuesProvider
+		defer func() { listOpenIssuesProvider = originalListProvider }()
+		listOpenIssuesProvider = func(ctx context.Context, cl *github.Client, owner, repo string) ([]*github.Issue, error) {
+			num := 10
+			title := "Open issue 10"
+			lbl := "seraphine-bug"
+			login := "brotherlogic-automation"
+			return []*github.Issue{
+				{
+					Number:    &num,
+					Title:     &title,
+					Labels:    []*github.Label{{Name: &lbl}},
+					Assignee:  &github.User{Login: &login},
+					Assignees: []*github.User{{Login: &login}},
+				},
+			}, nil
+		}
+
+		originalCommandRunner := commandRunner
+		defer func() { commandRunner = originalCommandRunner }()
+
+		var capturedCommands [][]string
+		var devpodListCalls int32
+		var mu sync.Mutex
+		commandRunner = func(name string, args ...string) ([]byte, error) {
+			mu.Lock()
+			capturedCommands = append(capturedCommands, append([]string{name}, args...))
+			mu.Unlock()
+
+			if name == devpodExe && len(args) > 0 && args[0] == "list" {
+				callNum := atomic.AddInt32(&devpodListCalls, 1)
+				if callNum == 2 {
+					return []byte("transient devpod list error"), errors.New("transient devpod list error")
+				}
+				return []byte(`[{"id": "test-repo"}, {"id": "test-repo-7"}, {"id": "test-repo-8"}, {"id": "test-repo-10"}]`), nil
+			}
+			if name == "docker" && len(args) > 0 && args[0] == "ps" {
+				return []byte(
+					"test-repo|sh.loft.devpod.workspace.id=test-repo\n" +
+						"test-repo-7|sh.loft.devpod.workspace.id=test-repo-7\n" +
+						"test-repo-8|sh.loft.devpod.workspace.id=test-repo-8\n" +
+						"test-repo-10|sh.loft.devpod.workspace.id=test-repo-10\n",
+				), nil
+			}
+			return []byte("success"), nil
+		}
+
+		mux.HandleFunc("/repos/test-owner/test-repo/contents/.devcontainer/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		})
+		mux.HandleFunc("/repos/test-owner/test-repo/contents/devcontainer.json", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		})
+
+		cfg := &config{
+			once:               true,
+			containerList:      tmpFile.Name(),
+			maxIssueContainers: 5,
+		}
+
+		if err := run(context.Background(), cfg); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		stopped := make(map[string]bool)
+		deleted := make(map[string]bool)
+		notified10 := make(map[int]bool)
+		notifiedDeleted := make(map[string]bool)
+
+		for _, cmd := range capturedCommands {
+			if len(cmd) >= 3 && cmd[0] == devpodExe {
+				switch cmd[1] {
+				case "stop":
+					stopped[cmd[2]] = true
+				case "delete":
+					deleted[cmd[2]] = true
+				case "ssh":
+					cmdStr := strings.Join(cmd, " ")
+					if strings.Contains(cmdStr, "tmux send-keys") {
+						target := cmd[2]
+						if target == "test-repo-7" || target == "test-repo-8" {
+							notifiedDeleted[target] = true
+						}
+						if target == "test-repo-10" {
+							for _, n := range []int{7, 8} {
+								if strings.Contains(cmdStr, fmt.Sprintf("Issue #%d has been updated, please refresh", n)) {
+									notified10[n] = true
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		for _, id := range []string{"test-repo-7", "test-repo-8"} {
+			if !stopped[id] || !deleted[id] {
+				t.Errorf("expected %s to be stopped and deleted via extra cleanup, got stopped=%v deleted=%v", id, stopped[id], deleted[id])
+			}
+			if notifiedDeleted[id] {
+				t.Errorf("expected deleted sibling %s NOT to receive peer notification", id)
+			}
+		}
+		if stopped["test-repo-10"] || deleted["test-repo-10"] {
+			t.Errorf("expected test-repo-10 NOT to be stopped or deleted")
+		}
+		for _, n := range []int{7, 8} {
+			if !notified10[n] {
+				t.Errorf("expected test-repo-10 to receive notification for issue #%d during extra cleanup", n)
+			}
+		}
+	})
+}

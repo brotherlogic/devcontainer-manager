@@ -96,10 +96,14 @@ type DevpodWorkspace struct {
 type devpodWorkspace = DevpodWorkspace
 
 func findPeerIssueContainers(workspaces []DevpodWorkspace, targetID string, projectID string) []string {
+	return findPeerIssueContainersExcluding(workspaces, targetID, projectID, nil)
+}
+
+func findPeerIssueContainersExcluding(workspaces []DevpodWorkspace, targetID string, projectID string, exclude map[string]bool) []string {
 	var peers []string
 	prefix := projectID + "-"
 	for _, w := range workspaces {
-		if w.ID == targetID {
+		if w.ID == targetID || exclude[w.ID] {
 			continue
 		}
 		if strings.HasPrefix(w.ID, prefix) {
@@ -120,6 +124,52 @@ func findPeerIssueContainers(workspaces []DevpodWorkspace, targetID string, proj
 		}
 	}
 	return peers
+}
+
+func teardownContainer(
+	ctx context.Context,
+	repo string,
+	containerID string,
+	workspaces []DevpodWorkspace,
+	excludePeers map[string]bool,
+	projectRepoMap map[string]string,
+	running map[string]bool,
+	stateMu *sync.Mutex,
+	trackedSHAs map[string]string,
+	wg *sync.WaitGroup,
+	reason string,
+) bool {
+	if projectID, issueNumber, ok := parsePeerID(containerID); ok {
+		if projectRepo, exists := projectRepoMap[projectID]; exists && projectRepo != "" {
+			peers := findPeerIssueContainersExcluding(workspaces, containerID, projectID, excludePeers)
+			if len(peers) > 0 {
+				runningCopy := make(map[string]bool)
+				stateMu.Lock()
+				for k, v := range running {
+					runningCopy[k] = v
+				}
+				stateMu.Unlock()
+				wg.Add(1)
+				go func(r string, p []string, iNum int) {
+					defer wg.Done()
+					notifyPeerContainers(ctx, r, p, runningCopy, iNum)
+				}(projectRepo, peers, issueNumber)
+			}
+		}
+	}
+
+	if errStop := stopContainer(repo, containerID); errStop != nil {
+		logWithPrefix(repo, "Warning: failed to stop container %s during %s: %v", containerID, reason, errStop)
+	}
+	if errDelete := deleteContainer(repo, containerID); errDelete != nil {
+		logWithPrefix(repo, "Warning: failed to delete container %s during %s: %v", containerID, reason, errDelete)
+		return false
+	}
+	if _, exists := getTrackedSHA(containerID, trackedSHAs); exists {
+		deleteTrackedSHA(containerID, trackedSHAs)
+		return true
+	}
+	return false
 }
 
 // parsePeerID extracts the base workspace prefix and issue number from a peer container ID formatted as <baseID>-<issueNum>.
@@ -1025,16 +1075,19 @@ func run(ctx context.Context, cfg *config) error {
 	loopWg.Wait()
 
 	// Resource Management & Cleanup Logic for issue containers
+	cleanedUpIDs := make(map[string]bool)
 	if client != nil {
-		projectRepoMap := make(map[string]string)
-		for _, repo := range repos {
-			parts := strings.Split(repo, "/")
-			pID := parts[len(parts)-1]
-			projectRepoMap[pID] = repo
-		}
-
 		workspaces, errList := listDevpodWorkspaces()
-		if errList == nil {
+		if errList != nil {
+			log.Printf("Warning: failed to list devpod workspaces for hibernation and cleanup: %v", errList)
+		} else {
+			type fetchedIssueResult struct {
+				issue *github.Issue
+				resp  *github.Response
+				err   error
+			}
+			fetchedIssues := make(map[string]fetchedIssueResult)
+
 			// 1. Hibernation Logic
 			type issueContainer struct {
 				id          string
@@ -1063,23 +1116,22 @@ func run(ctx context.Context, cfg *config) error {
 					log.Printf("Debug: Skipping devpod %s: Failed to parse issue number from ID '%s': %v", id, id[lastIdx+1:], errNum)
 					continue
 				}
-				if repo != "" {
-					partsRepo := strings.Split(repo, "/")
-					if len(partsRepo) == 2 {
-						owner, repoName := partsRepo[0], partsRepo[1]
-						issue, _, errGet := client.Issues.Get(ctx, owner, repoName, issueNumber)
-						if errGet == nil {
-							runningIssues = append(runningIssues, issueContainer{
-								id:          id,
-								repo:        repo,
-								owner:       owner,
-								repoName:    repoName,
-								issueNumber: issueNumber,
-								updatedAt:   issue.GetUpdatedAt().Time,
-							})
-						} else {
-							log.Printf("Debug: Skipping devpod %s: Failed to get issue %d from %s: %v", id, issueNumber, repo, errGet)
-						}
+				partsRepo := strings.Split(repo, "/")
+				if len(partsRepo) == 2 {
+					owner, repoName := partsRepo[0], partsRepo[1]
+					issue, resp, errGet := getIssueWithRetry(ctx, client, owner, repoName, issueNumber)
+					fetchedIssues[id] = fetchedIssueResult{issue: issue, resp: resp, err: errGet}
+					if errGet == nil {
+						runningIssues = append(runningIssues, issueContainer{
+							id:          id,
+							repo:        repo,
+							owner:       owner,
+							repoName:    repoName,
+							issueNumber: issueNumber,
+							updatedAt:   issue.GetUpdatedAt().Time,
+						})
+					} else {
+						log.Printf("Warning: failed to get issue %d from %s for devpod %s: %v", issueNumber, repo, id, errGet)
 					}
 				}
 			}
@@ -1104,71 +1156,71 @@ func run(ctx context.Context, cfg *config) error {
 			}
 
 			// 2. Cleanup Logic
+			type cleanupTarget struct {
+				id   string
+				repo string
+			}
+			var cleanupTargets []cleanupTarget
+			cleanupSet := make(map[string]bool)
+
 			for _, w := range workspaces {
 				id := w.ID
 				lastIdx := strings.LastIndex(id, "-")
-				if lastIdx != -1 {
-					projectID := id[:lastIdx]
-					issueNumber, errNum := strconv.Atoi(id[lastIdx+1:])
-					repo := projectRepoMap[projectID]
-					if errNum == nil && repo != "" {
-						partsRepo := strings.Split(repo, "/")
-						if len(partsRepo) == 2 {
-							owner, repoName := partsRepo[0], partsRepo[1]
-							issue, resp, errGet := client.Issues.Get(ctx, owner, repoName, issueNumber)
+				if lastIdx == -1 {
+					continue
+				}
+				projectID := id[:lastIdx]
+				issueNumber, errNum := strconv.Atoi(id[lastIdx+1:])
+				repo := projectRepoMap[projectID]
+				if errNum != nil || repo == "" {
+					continue
+				}
+				partsRepo := strings.Split(repo, "/")
+				if len(partsRepo) != 2 {
+					continue
+				}
+				owner, repoName := partsRepo[0], partsRepo[1]
 
-							shouldCleanup := false
-							if errGet == nil {
-								if issue.GetState() == "closed" {
-									shouldCleanup = true
-								} else if !globalCache.IsManual(id) {
-									hasSeraphineLabel := false
-									for _, label := range issue.Labels {
-										if strings.HasPrefix(label.GetName(), "seraphine") {
-											hasSeraphineLabel = true
-											break
-										}
-									}
-									if !hasSeraphineLabel {
-										shouldCleanup = true
-									}
-								}
-							} else if resp != nil && resp.StatusCode == http.StatusNotFound {
-								shouldCleanup = true
-							}
+				res, ok := fetchedIssues[id]
+				if !ok {
+					issue, resp, errGet := getIssueWithRetry(ctx, client, owner, repoName, issueNumber)
+					res = fetchedIssueResult{issue: issue, resp: resp, err: errGet}
+					fetchedIssues[id] = res
+				}
 
-							if shouldCleanup {
-								logWithPrefix(repo, "Cleaning up finished/unlabeled issue container: %s", id)
-								peers := findPeerIssueContainers(workspaces, id, projectID)
-								if len(peers) > 0 {
-									runningCopy := make(map[string]bool)
-									stateMu.Lock()
-									for k, v := range running {
-										runningCopy[k] = v
-									}
-									stateMu.Unlock()
-									wg.Add(1)
-									go func(p []string, issueNum int) {
-										defer wg.Done()
-										notifyPeerContainers(ctx, repo, p, runningCopy, issueNum)
-									}(peers, issueNumber)
-								}
-								errStop := stopContainer(repo, id)
-								if errStop != nil {
-									logWithPrefix(repo, "Warning: failed to stop container %s during cleanup: %v", id, errStop)
-								}
-								errDelete := deleteContainer(repo, id)
-								if errDelete != nil {
-									logWithPrefix(repo, "Failed to delete container %s during cleanup: %v", id, errDelete)
-								} else {
-									if _, exists := getTrackedSHA(id, trackedSHAs); exists {
-										deleteTrackedSHA(id, trackedSHAs)
-										trackedSHAsChanged = true
-									}
-								}
+				shouldCleanup := false
+				if res.err == nil {
+					if res.issue.GetState() == "closed" {
+						shouldCleanup = true
+					} else if !globalCache.IsManual(id) {
+						hasSeraphineLabel := false
+						for _, label := range res.issue.Labels {
+							if strings.HasPrefix(label.GetName(), "seraphine") {
+								hasSeraphineLabel = true
+								break
 							}
 						}
+						if !hasSeraphineLabel {
+							shouldCleanup = true
+						}
 					}
+				} else if res.resp != nil && res.resp.StatusCode == http.StatusNotFound {
+					shouldCleanup = true
+				} else {
+					logWithPrefix(repo, "Warning: failed to get issue %d for cleanup check on %s: %v", issueNumber, id, res.err)
+				}
+
+				if shouldCleanup {
+					cleanupTargets = append(cleanupTargets, cleanupTarget{id: id, repo: repo})
+					cleanupSet[id] = true
+					cleanedUpIDs[id] = true
+				}
+			}
+
+			for _, t := range cleanupTargets {
+				logWithPrefix(t.repo, "Cleaning up finished/unlabeled issue container: %s", t.id)
+				if teardownContainer(ctx, t.repo, t.id, workspaces, cleanupSet, projectRepoMap, running, &stateMu, trackedSHAs, &wg, "cleanup") {
+					trackedSHAsChanged = true
 				}
 			}
 		}
@@ -1176,44 +1228,64 @@ func run(ctx context.Context, cfg *config) error {
 
 	// 3. Extra Cleanup Logic for (a) not in template list (accounting for issues), and (b) use HTTP source
 	workspaces, listErr := listDevpodWorkspaces()
-	if listErr == nil {
+	if listErr != nil {
+		log.Printf("Warning: failed to list devpod workspaces for extra cleanup: %v", listErr)
+	} else {
 		validProjectNames := make(map[string]bool)
 		for _, r := range repos {
 			rParts := strings.Split(r, "/")
 			validProjectNames[rParts[len(rParts)-1]] = true
 		}
 
+		type extraCleanupTarget struct {
+			id           string
+			repo         string
+			inList       bool
+			isHTTPSource bool
+		}
+		var extraCleanupTargets []extraCleanupTarget
+		extraCleanupSet := make(map[string]bool)
+
 		for _, w := range workspaces {
 			cName := w.ID
 			cSource := w.Source.GitRepository
-			if cName != "" {
-				if strings.HasSuffix(cName, "-daemon") || w.Source.LocalFolder != "" {
-					continue
-				}
-				// Check (b): Uses HTTP source
-				u, errURL := url.Parse(cSource)
-				isHTTPSource := errURL == nil && (u.Scheme == "http" || u.Scheme == "https")
+			if cName == "" || cleanedUpIDs[cName] {
+				continue
+			}
+			if strings.HasSuffix(cName, "-daemon") || w.Source.LocalFolder != "" {
+				continue
+			}
+			// Check (b): Uses HTTP source
+			u, errURL := url.Parse(cSource)
+			isHTTPSource := errURL == nil && (u.Scheme == "http" || u.Scheme == "https")
 
-				// Check (a): Not in the container list (accounting for issues)
-				inList := validProjectNames[cName] || validIssueContainers[cName] || globalCache.IsManual(cName)
+			// Check (a): Not in the container list (accounting for issues)
+			inList := validProjectNames[cName] || validIssueContainers[cName] || globalCache.IsManual(cName)
 
-				if !inList || isHTTPSource {
-					cRepo := getRepoForID(cName, projectRepoMap)
-					logWithPrefix(cRepo, "Cleaning up container %s (inList: %v, isHTTPSource: %v)", cName, inList, isHTTPSource)
-					errStop := stopContainer(cRepo, cName)
-					if errStop != nil {
-						logWithPrefix(cRepo, "Warning: failed to stop container %s during extra cleanup: %v", cName, errStop)
-					}
-					errDel := deleteContainer(cRepo, cName)
-					if errDel != nil {
-						logWithPrefix(cRepo, "Warning: failed to delete container %s during extra cleanup: %v", cName, errDel)
-					} else {
-						if _, exists := getTrackedSHA(cName, trackedSHAs); exists {
-							deleteTrackedSHA(cName, trackedSHAs)
-							trackedSHAsChanged = true
-						}
-					}
-				}
+			if !inList || isHTTPSource {
+				cRepo := getRepoForID(cName, projectRepoMap)
+				extraCleanupTargets = append(extraCleanupTargets, extraCleanupTarget{
+					id:           cName,
+					repo:         cRepo,
+					inList:       inList,
+					isHTTPSource: isHTTPSource,
+				})
+				extraCleanupSet[cName] = true
+			}
+		}
+
+		extraExcludePeers := make(map[string]bool, len(cleanedUpIDs)+len(extraCleanupSet))
+		for id := range cleanedUpIDs {
+			extraExcludePeers[id] = true
+		}
+		for id := range extraCleanupSet {
+			extraExcludePeers[id] = true
+		}
+
+		for _, t := range extraCleanupTargets {
+			logWithPrefix(t.repo, "Cleaning up container %s (inList: %v, isHTTPSource: %v)", t.id, t.inList, t.isHTTPSource)
+			if teardownContainer(ctx, t.repo, t.id, workspaces, extraExcludePeers, projectRepoMap, running, &stateMu, trackedSHAs, &wg, "extra cleanup") {
+				trackedSHAsChanged = true
 			}
 		}
 	}
@@ -2249,7 +2321,7 @@ func adjustIssueLabels(ctx context.Context, client *github.Client, owner, repo s
 	}
 	log.Printf("Adjusting labels for issue #%d in %s/%s: add='%s', remove=%v (reason: %s)", issueNumber, owner, repo, addLabel, removeLabels, reason)
 	// Fetch the issue first to get current labels and avoid redundant API calls
-	issue, _, err := client.Issues.Get(ctx, owner, repo, issueNumber)
+	issue, _, err := getIssueWithRetry(ctx, client, owner, repo, issueNumber)
 	if err != nil {
 		log.Printf("Warning: failed to fetch issue %d in %s/%s for label adjustment: %v", issueNumber, owner, repo, err)
 		return
@@ -2472,6 +2544,17 @@ func getRepoForID(id string, projectRepoMap map[string]string) string {
 		return repo
 	}
 	return id
+}
+
+func getIssueWithRetry(ctx context.Context, client *github.Client, owner, repo string, issueNumber int) (*github.Issue, *github.Response, error) {
+	var issue *github.Issue
+	var resp *github.Response
+	err := withGitHubRetry(ctx, func() (*github.Response, error) {
+		var callErr error
+		issue, resp, callErr = client.Issues.Get(ctx, owner, repo, issueNumber)
+		return resp, callErr
+	})
+	return issue, resp, err
 }
 
 func withGitHubRetry(ctx context.Context, f func() (*github.Response, error)) error {
